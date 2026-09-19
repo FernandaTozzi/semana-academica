@@ -1,9 +1,9 @@
 {
-  "stack": "PREENCHER — linguagem e framework da API; tipo e framework da interface",
+  "stack": "Node.js 20 + TypeScript + Fastify + SQLite (sql.js WASM)",
   "api": {
     "pasta": "api",
-    "instalar": "PREENCHER — por exemplo: npm install",
-    "iniciar": "PREENCHER — por exemplo: npm start"
+    "instalar": "npm install",
+    "iniciar": "npm start"
   },
-  "testes": []
+  "testes": ["npm test"]
 }
