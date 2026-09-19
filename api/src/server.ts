@@ -3,6 +3,7 @@ import { inicializarBanco } from "./db.js";
 import { registrarRotasTeste } from "./rotas/teste.js";
 import { registrarRotasSalas } from "./rotas/salas.js";
 import { registrarRotasAtividades } from "./rotas/atividades.js";
+import { registrarRotasEncontros } from "./rotas/encontros.js";
 
 let cachedDb: Awaited<ReturnType<typeof inicializarBanco>> | null = null;
 
@@ -36,6 +37,7 @@ export async function createServer() {
 
   registrarRotasSalas(app);
   registrarRotasAtividades(app);
+  registrarRotasEncontros(app);
 
   return app;
 }
