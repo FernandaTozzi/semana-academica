@@ -7,7 +7,9 @@ const MINUTOS_ANTES = 15 * 60 * 1000;
 const MINUTOS_DEPOIS = 30 * 60 * 1000;
 const MILIS_DA_JANELA = 60 * 1000;
 
-function agoraServidor(app: FastifyInstance): Date {
+export { MINUTOS_ANTES, MINUTOS_DEPOIS, MILIS_DA_JANELA };
+
+export function agoraServidor(app: FastifyInstance): Date {
   if (process.env.MODO_TESTE === "1") {
     return new Date(obterRelogioTeste(app.db));
   }
@@ -23,7 +25,7 @@ function hashString(s: string): number {
   return h >>> 0;
 }
 
-function codigoDaJanela(encontroId: string, janelaInicio: number): string {
+export function codigoDaJanela(encontroId: string, janelaInicio: number): string {
   const base = `${encontroId}|${janelaInicio}`;
   let codigo = "";
   for (let i = 0; i < 6; i++) {
