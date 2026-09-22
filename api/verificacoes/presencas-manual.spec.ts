@@ -244,6 +244,31 @@ describe("M3 Fatia 5 - Presença manual (R15-R18)", () => {
     assert.equal((depois.body as { erro: string }).erro, "FORA_DA_JANELA");
   });
 
+  it("R18 - inscrito confirmado com relógio fora da janela manual e teto de manuais atingido retorna 422 FORA_DA_JANELA antes de LIMITE_DE_MANUAIS", async () => {
+    const existentes = ["p-carla", "p-diego", "p-elisa", "p-fabio", "p-gabriela", "p-heitor", "p-isadora", "p-joao"];
+    const novos = ["p-x1", "p-x2", "p-x3", "p-x4", "p-x5"];
+    await resetar("2026-10-19T10:15:30-03:00", {
+      novosParticipantes: novos,
+      inscricoes: [...existentes, ...novos].map((participanteId) => ({
+        participanteId,
+        status: "confirmada",
+      })),
+    });
+
+    const r1 = await registrarManual("p-carla", "Presença registrada pela coordenação");
+    assert.equal(r1.status, 201);
+    const r2 = await registrarManual("p-diego", "Presença registrada pela coordenação");
+    assert.equal(r2.status, 201);
+
+    await fetchJson("/_teste/relogio", {
+      method: "PUT",
+      body: JSON.stringify({ agora: "2026-10-19T13:01:00-03:00" }),
+    });
+    const r3 = await registrarManual("p-elisa", "Presença registrada pela coordenação");
+    assert.equal(r3.status, 422);
+    assert.equal((r3.body as { erro: string }).erro, "FORA_DA_JANELA");
+  });
+
   it("R17 - com 13 inscrições confirmadas o teto é 2: 2ª manual aceita (201), 3ª retorna 422 LIMITE_DE_MANUAIS", async () => {
     const existentes = ["p-carla", "p-diego", "p-elisa", "p-fabio", "p-gabriela", "p-heitor", "p-isadora", "p-joao"];
     const novos = ["p-x1", "p-x2", "p-x3", "p-x4", "p-x5"];

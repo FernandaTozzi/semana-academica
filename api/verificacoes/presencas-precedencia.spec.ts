@@ -88,6 +88,25 @@ describe("M3 Fatia 4 - Precedência do POST online (R13, R10)", () => {
     assert.equal((r.body as { erro: string }).erro, "NAO_INSCRITO");
   });
 
+  it("R13 - POST de participante não inscrito com lidoEm na janela e envio após 2h do fim retorna 403 NAO_INSCRITO antes de SINCRONIZACAO_TARDIA", async () => {
+    await resetar("2026-10-19T10:15:30-03:00", {
+      inscricoes: [{ participanteId: "p-diego", status: "em_espera" }],
+    });
+
+    await fetchJson("/_teste/relogio", {
+      method: "PUT",
+      body: JSON.stringify({ agora: "2026-10-19T13:00:01-03:00" }),
+    });
+
+    const r = await fetchJson("/encontros/enc_5e6f7a8b/presencas", {
+      method: "POST",
+      headers: { "X-Usuario": "p-diego" },
+      body: JSON.stringify({ codigo: "ZZZZZZ", lidoEm: "2026-10-19T10:15:30-03:00" }),
+    });
+    assert.equal(r.status, 403);
+    assert.equal((r.body as { erro: string }).erro, "NAO_INSCRITO");
+  });
+
   it("R13 - POST com lidoEm dentro da janela, código errado e envio após 2h do fim retorna 422 SINCRONIZACAO_TARDIA antes de FORA_DA_JANELA e CODIGO_INVALIDO", async () => {
     await resetar("2026-10-19T10:15:30-03:00", {
       inscricoes: [{ participanteId: "p-carla", status: "confirmada" }],
