@@ -81,7 +81,7 @@ export function registrarRotasPresencas(app: FastifyInstance) {
       }
 
       const encontro = linhaParaObjeto(result[0].columns, result[0].values[0]);
-      const corpo = (req.body ?? {}) as { codigo?: unknown };
+      const corpo = (req.body ?? {}) as { codigo?: unknown; lidoEm?: unknown };
       if (typeof corpo.codigo !== "string" || corpo.codigo.length !== 6) {
         return reply.code(422).send({
           erro: "DADOS_INVALIDOS",
@@ -90,6 +90,17 @@ export function registrarRotasPresencas(app: FastifyInstance) {
       }
 
       const agoraMs = agoraServidor(app).getTime();
+
+      const lidoEm = corpo.lidoEm as string | undefined;
+      const offline = lidoEm !== undefined;
+      const lidoMs = offline ? new Date(lidoEm).getTime() : agoraMs;
+      if (offline && Number.isNaN(lidoMs)) {
+        return reply.code(422).send({
+          erro: "DADOS_INVALIDOS",
+          mensagem: "Campo 'lidoEm' deve ser uma data ISO 8601",
+        });
+      }
+      const instanteEfetivo = offline ? Math.min(lidoMs, agoraMs) : agoraMs;
 
       const existente = db.exec(
         `SELECT id, origem, lido_em, registrada_em, justificativa
@@ -116,14 +127,26 @@ export function registrarRotasPresencas(app: FastifyInstance) {
       }
 
       const inicio = new Date(encontro.inicio as string).getTime();
-      if (agoraMs < inicio - MINUTOS_ANTES || agoraMs > inicio + MINUTOS_DEPOIS) {
+      const fim = new Date(encontro.fim as string).getTime();
+
+      if (offline) {
+        const limiteSincronizacao = fim + 2 * 60 * 60 * 1000;
+        if (agoraMs > limiteSincronizacao) {
+          return reply.code(422).send({
+            erro: "SINCRONIZACAO_TARDIA",
+            mensagem: "Envio offline após 2 horas do fim do encontro",
+          });
+        }
+      }
+
+      if (instanteEfetivo < inicio - MINUTOS_ANTES || instanteEfetivo > inicio + MINUTOS_DEPOIS) {
         return reply.code(422).send({
           erro: "FORA_DA_JANELA",
           mensagem: "Fora da janela de registro de presença",
         });
       }
 
-      if (!codigoEhValido(id, corpo.codigo, agoraMs)) {
+      if (!codigoEhValido(id, corpo.codigo, instanteEfetivo)) {
         return reply.code(422).send({
           erro: "CODIGO_INVALIDO",
           mensagem: "Código não é válido para este encontro neste momento",
@@ -132,10 +155,12 @@ export function registrarRotasPresencas(app: FastifyInstance) {
 
       const idPresenca = novoIdPresenca();
       const registradaEm = new Date(agoraMs).toISOString();
+      const lidoEmArmazenado = offline ? lidoEm : registradaEm;
+      const origem = offline ? "qr_offline" : "qr";
       db.run(
         `INSERT INTO presencas (id, encontro_id, participante_id, origem, lido_em, registrada_em)
-         VALUES (?, ?, ?, 'qr', ?, ?)`,
-        [idPresenca, id, usuario.id, registradaEm, registradaEm]
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [idPresenca, id, usuario.id, origem, lidoEmArmazenado, registradaEm]
       );
       salvarBanco(db);
 
@@ -143,8 +168,8 @@ export function registrarRotasPresencas(app: FastifyInstance) {
         id: idPresenca,
         encontroId: id,
         participanteId: usuario.id,
-        origem: "qr",
-        lidoEm: registradaEm,
+        origem,
+        lidoEm: lidoEmArmazenado,
         registradaEm,
         justificativa: null,
       });
