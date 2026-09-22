@@ -20,13 +20,25 @@ export async function createServer() {
 
   app.decorate("db", db);
 
-  // Permitir body vazio em POST
+  // Parse body as string to allow custom JSON parsing with error handling
   app.addContentTypeParser("application/json", { parseAs: "string" }, (req, body, done) => {
-    try {
-      const json = body ? JSON.parse(body as string) : {};
-      done(null, json);
-    } catch (err) {
-      done(err as Error, undefined);
+    done(null, body);
+  });
+
+  // Pre-validation hook to parse JSON and handle invalid JSON
+  app.addHook("preValidation", async (req, reply) => {
+    const body = req.body;
+    if (typeof body === "string" && body.trim() !== "") {
+      try {
+        req.body = JSON.parse(body);
+      } catch (err) {
+        return reply.code(422).send({
+          erro: "DADOS_INVALIDOS",
+          mensagem: "JSON inválido",
+        });
+      }
+    } else if (typeof body === "string" && body.trim() === "") {
+      req.body = {};
     }
   });
 
