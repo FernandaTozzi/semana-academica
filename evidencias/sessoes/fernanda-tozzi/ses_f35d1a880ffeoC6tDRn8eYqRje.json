@@ -1,0 +1,1417 @@
+{
+ "info": {
+  "id": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+  "slug": "curious-planet",
+  "projectID": "806cda80bec71febecee66cf854ff7696c11d5ff",
+  "directory": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+  "path": "",
+  "title": "TDD Fatia 4 de M3-presenca",
+  "agent": "build",
+  "model": {
+   "id": "big-pickle",
+   "providerID": "opencode"
+  },
+  "version": "1.18.32",
+  "summary": {
+   "additions": 0,
+   "deletions": 0,
+   "files": 0
+  },
+  "cost": 0,
+  "tokens": {
+   "input": 42570,
+   "output": 22966,
+   "reasoning": 0,
+   "cache": {
+    "read": 371200,
+    "write": 0
+   }
+  },
+  "time": {
+   "created": 1790098429823,
+   "updated": 1790098829188
+  }
+ },
+ "messages": [
+  {
+   "info": {
+    "role": "user",
+    "time": {
+     "created": 1790098429911
+    },
+    "agent": "build",
+    "model": {
+     "providerID": "opencode",
+     "modelID": "big-pickle"
+    },
+    "summary": {
+     "diffs": [
+      {
+       "file": "api/verificacoes/presencas-precedencia.spec.ts",
+       "patch": "Index: api/verificacoes/presencas-precedencia.spec.ts\n===================================================================\n--- api/verificacoes/presencas-precedencia.spec.ts\t\n+++ api/verificacoes/presencas-precedencia.spec.ts\t\n@@ -0,0 +1,154 @@\n+import { describe, it, before, after } from \"node:test\";\n+import assert from \"node:assert/strict\";\n+import { createServer } from \"../src/server.js\";\n+\n+let server: Awaited<ReturnType<typeof createServer>>;\n+const PORT = 3013;\n+const BASE_URL = `http://localhost:${PORT}`;\n+\n+async function fetchJson(path: string, options: RequestInit = {}) {\n+  const res = await fetch(`${BASE_URL}${path}`, {\n+    ...options,\n+    headers: {\n+      \"Content-Type\": \"application/json\",\n+      ...options.headers,\n+    },\n+  });\n+  const text = await res.text();\n+  let body: unknown = null;\n+  if (text) {\n+    try {\n+      body = JSON.parse(text);\n+    } catch {\n+      body = text;\n+    }\n+  }\n+  return { status: res.status, body, headers: res.headers };\n+}\n+\n+function semearEncontro(opts: {\n+  inscricoes?: Array<{ participanteId: string; status: string }>;\n+} = {}) {\n+  const db = server.db;\n+  db.run(\n+    \"INSERT INTO atividades (id, titulo, tipo, sala_id, vagas, situacao) VALUES (?, 'Palestra de teste', 'palestra', 'sala-101', 40, 'prevista')\",\n+    [\"atv_a1b2c3d4\"]\n+  );\n+  db.run(\n+    \"INSERT INTO encontros (id, atividade_id, inicio, fim, ordem) VALUES ('enc_5e6f7a8b', 'atv_a1b2c3d4', ?, ?, 1)\",\n+    [\"2026-10-19T10:00:00-03:00\", \"2026-10-19T11:00:00-03:00\"]\n+  );\n+  for (const i of opts.inscricoes ?? []) {\n+    db.run(\n+      \"INSERT INTO inscricoes (id, atividade_id, participante_id, status) VALUES (?, 'atv_a1b2c3d4', ?, ?)\",\n+      [`ins_${i.participanteId}_${i.status}`, i.participanteId, i.status]\n+    );\n+  }\n+}\n+\n+async function resetar(agora: string, opts: Parameters<typeof semearEncontro>[0] = {}) {\n+  await fetchJson(\"/_teste/reset\", { method: \"POST\" });\n+  await fetchJson(\"/_teste/relogio\", {\n+    method: \"PUT\",\n+    body: JSON.stringify({ agora }),\n+  });\n+  semearEncontro(opts);\n+}\n+\n+async function obterCodigo() {\n+  const r = await fetchJson(\"/encontros/enc_5e6f7a8b/codigo\", {\n+    headers: { \"X-Usuario\": \"org-ana\" },\n+  });\n+  assert.equal(r.status, 200);\n+  return (r.body as { codigo: string }).codigo;\n+}\n+\n+describe(\"M3 Fatia 4 - Precedência do POST online (R13, R10)\", () => {\n+  before(async () => {\n+    process.env.MODO_TESTE = \"1\";\n+    server = await createServer();\n+    await new Promise<void>((resolve) => server.listen({ port: PORT }, resolve));\n+  });\n+\n+  after(async () => {\n+    await server.close();\n+  });\n+\n+  it(\"R13 - POST de participante não inscrito com código inválido retorna 403 NAO_INSCRITO antes de CODIGO_INVALIDO\", async () => {\n+    await resetar(\"2026-10-19T10:15:30-03:00\", {\n+      inscricoes: [{ participanteId: \"p-diego\", status: \"em_espera\" }],\n+    });\n+\n+    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n+      method: \"POST\",\n+      headers: { \"X-Usuario\": \"p-diego\" },\n+      body: JSON.stringify({ codigo: \"ZZZZZZ\" }),\n+    });\n+    assert.equal(r.status, 403);\n+    assert.equal((r.body as { erro: string }).erro, \"NAO_INSCRITO\");\n+  });\n+\n+  it(\"R13 - POST com lidoEm dentro da janela, código errado e envio após 2h do fim retorna 422 SINCRONIZACAO_TARDIA antes de FORA_DA_JANELA e CODIGO_INVALIDO\", async () => {\n+    await resetar(\"2026-10-19T10:15:30-03:00\", {\n+      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n+    });\n+\n+    await fetchJson(\"/_teste/relogio\", {\n+      method: \"PUT\",\n+      body: JSON.stringify({ agora: \"2026-10-19T13:00:01-03:00\" }),\n+    });\n+\n+    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n+      method: \"POST\",\n+      headers: { \"X-Usuario\": \"p-carla\" },\n+      body: JSON.stringify({ codigo: \"ZZZZZZ\", lidoEm: \"2026-10-19T10:15:30-03:00\" }),\n+    });\n+    assert.equal(r.status, 422);\n+    assert.equal((r.body as { erro: string }).erro, \"SINCRONIZACAO_TARDIA\");\n+  });\n+\n+  it(\"R13 - POST com código errado e lidoEm fora da janela retorna 422 FORA_DA_JANELA antes de CODIGO_INVALIDO\", async () => {\n+    await resetar(\"2026-10-19T10:15:30-03:00\", {\n+      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n+    });\n+\n+    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n+      method: \"POST\",\n+      headers: { \"X-Usuario\": \"p-carla\" },\n+      body: JSON.stringify({ codigo: \"ZZZZZZ\", lidoEm: \"2026-10-19T09:30:00-03:00\" }),\n+    });\n+    assert.equal(r.status, 422);\n+    assert.equal((r.body as { erro: string }).erro, \"FORA_DA_JANELA\");\n+  });\n+\n+  it(\"R10 - POST de presença nunca devolve ATIVIDADE_CANCELADA, mesmo com a atividade cancelada (GET /codigo já recusa)\", async () => {\n+    await resetar(\"2026-10-19T10:15:30-03:00\", {\n+      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n+    });\n+\n+    const codigo = await obterCodigo();\n+\n+    const db = server.db;\n+    db.run(\n+      \"UPDATE atividades SET situacao = 'cancelada' WHERE id = 'atv_a1b2c3d4'\"\n+    );\n+    db.run(\n+      \"UPDATE inscricoes SET status = 'cancelada' WHERE participante_id = 'p-carla' AND atividade_id = 'atv_a1b2c3d4'\"\n+    );\n+\n+    const rGet = await fetchJson(\"/encontros/enc_5e6f7a8b/codigo\", {\n+      headers: { \"X-Usuario\": \"org-ana\" },\n+    });\n+    assert.equal(rGet.status, 422);\n+    assert.equal((rGet.body as { erro: string }).erro, \"ATIVIDADE_CANCELADA\");\n+\n+    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n+      method: \"POST\",\n+      headers: { \"X-Usuario\": \"p-carla\" },\n+      body: JSON.stringify({ codigo }),\n+    });\n+    assert.equal(r.status, 403);\n+    assert.equal((r.body as { erro: string }).erro, \"NAO_INSCRITO\");\n+    assert.notEqual((r.body as { erro: string }).erro, \"ATIVIDADE_CANCELADA\");\n+  });\n+});\n\\ No newline at end of file\n",
+       "additions": 154,
+       "deletions": 0,
+       "status": "added"
+      }
+     ]
+    },
+    "id": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "type": "text",
+     "text": "Use a skill tdd. Implemente somente a Fatia 4 de ../specs/M3-presenca.md.\n\nSiga TDD: para cada comportamento, escreva primeiro o teste, execute e mostre ele falhando, e somente depois implemente o código mínimo necessário para fazê-lo passar.\n\nNão implemente nenhuma regra das fatias 5 ou 6.\n\nAo terminar, execute todos os testes e informe quantos passaram e quantos falharam. ",
+     "id": "prt_0ca2e57de001JpltXPFmHqvfHy",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2e57d70017E0kKMSWIN6PXH"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 9231,
+     "input": 7366,
+     "output": 73,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 1792
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1790098429986,
+     "completed": 1790098441411
+    },
+    "finish": "tool-calls",
+    "id": "msg_0ca2e5822001aECKX6ze70ByRe",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-start",
+     "id": "prt_0ca2e791f001ayEL4hZWvegoUy",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2e5822001aECKX6ze70ByRe"
+    },
+    {
+     "type": "reasoning",
+     "text": "The user wants me to use the tdd skill and implement only Slice 4 of the spec. Let me load the skill first.",
+     "time": {
+      "start": 1790098438439,
+      "end": 1790098439190
+     },
+     "id": "prt_0ca2e7927001mnj7f7cPschvNN",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2e5822001aECKX6ze70ByRe"
+    },
+    {
+     "type": "tool",
+     "tool": "skill",
+     "callID": "call_6a44625e045c48a2a17590b8",
+     "state": {
+      "status": "completed",
+      "input": {
+       "name": "tdd"
+      },
+      "output": "<skill_content name=\"tdd\">\n# Skill: tdd\n\n# Teste primeiro, uma fatia por vez\r\n\r\nO ciclo é: **um teste que falha → o código mínimo que faz ele passar → a próxima fatia.**\r\nNada de escrever a suíte inteira e depois o código inteiro.\r\n\r\nVocê precisa de uma spec com regras numeradas. Sem ela, pare: você vai acabar testando o\r\nque você mesmo inventou. Sem contrato, verde não significa nada.\r\n\r\n## Onde o teste mora\r\n\r\nTeste verifica **comportamento pela interface pública**, nunca implementação. Aqui a\r\ninterface é HTTP: suba o servidor com `criarServidor()` e fale por `fetch`. Não importe\r\nserviço nem repositório no teste — se importar, o teste quebra quando você refatorar\r\nsem que o comportamento tenha mudado.\r\n\r\nPadrão do projeto: `node --test`, `node:assert/strict`, um arquivo em `verificacoes/`,\r\nespelhando `verificacoes/livros.spec.js`. Sem framework, sem dependência, sem mock.\r\n\r\n## O ciclo, por fatia\r\n\r\nPara cada fatia da spec, nesta ordem:\r\n\r\n1. Escreva **um** teste que prova **um** critério de aceite. O nome do teste é a regra\r\n   em português: `it('recusa o quarto empréstimo ativo do mesmo leitor')`.\r\n2. Rode. **Ele tem que falhar.** Teste que passa antes do código existir não está\r\n   testando nada — descubra por quê antes de seguir.\r\n3. Escreva o mínimo de código que faz ele passar. Nada de já implementar a regra\r\n   seguinte \"que eu vou precisar mesmo\".\r\n4. Rode a suíte inteira. Verde? Próxima fatia.\r\n\r\nSó passe para a fatia seguinte com a suíte inteira verde.\r\n\r\n## A regra que não se quebra\r\n\r\n**Quando o teste falha, o suspeito é o código.**\r\n\r\nSe você mudar um teste para ele passar, você trocou o contrato pela sua implementação e\r\no verde virou enfeite. Só se altera um teste quando a **spec** mudou — e aí você diz, em\r\nvoz alta, qual regra da spec mudou e por quê.\r\n\r\nVale para o valor esperado, para o status HTTP e para o cenário. Trocar\r\n`assert.equal(dias, 14)` por `assert.equal(dias, 7)` porque o código deu 7 é a forma mais\r\ncomum de mentir sozinho.\r\n\r\n## Três testes que não valem nada\r\n\r\n- **Acoplado à implementação** — chama serviço ou repositório direto, ou confere o dado\r\n  espiando o `Map` em vez de pedir pela API. Quebra em refatoração, não em regressão.\r\n- **Tautológico** — o esperado é calculado do mesmo jeito que o código calcula\r\n  (`assert.equal(multa, dias * 1.5)`). Passa por construção, nunca discorda do código.\r\n  O valor esperado vem da spec, escrito na mão: `assert.equal(multa, 4.5)`.\r\n- **Frouxo** — confere só o status e ignora o corpo. `201` com o prazo errado passa.\r\n\r\n## Fechamento\r\n\r\nTerminada a última fatia, rode a suíte inteira uma vez e relate o número real que\r\napareceu na saída. Não estime, não arredonde, não repita um número de outra rodada.\n\nBase directory for this skill: C:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\skills\\tdd\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>",
+      "metadata": {
+       "name": "tdd",
+       "dir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\skills\\tdd",
+       "truncated": false
+      },
+      "title": "Loaded skill: tdd",
+      "time": {
+       "start": 1790098439241,
+       "end": 1790098439388
+      }
+     },
+     "id": "prt_0ca2e7c23001h1CHoFnpxvoo5N",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2e5822001aECKX6ze70ByRe"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-finish",
+     "tokens": {
+      "total": 9231,
+      "input": 7366,
+      "output": 73,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 1792
+      }
+     },
+     "cost": 0,
+     "id": "prt_0ca2e7f940019a3zaQCuxcFB11",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2e5822001aECKX6ze70ByRe"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 10377,
+     "input": 993,
+     "output": 168,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 9216
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1790098441423,
+     "completed": 1790098452183
+    },
+    "finish": "tool-calls",
+    "id": "msg_0ca2e84cf001aO53Nj91xpAAFv",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-start",
+     "id": "prt_0ca2e8bc8001ytQdCH8jvaWHBY",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2e84cf001aO53Nj91xpAAFv"
+    },
+    {
+     "type": "reasoning",
+     "text": "Let me read the spec and explore the project structure first.",
+     "time": {
+      "start": 1790098443214,
+      "end": 1790098443641
+     },
+     "id": "prt_0ca2e8bce001EKwWD1XcOkSfqG",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2e84cf001aO53Nj91xpAAFv"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_f9b3d9dee3464e3eb28045ec",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\specs\\M3-presenca.md"
+      },
+      "output": "[13979 caracteres omitidos]",
+      "title": "specs\\M3-presenca.md",
+      "time": {
+       "start": 1790098444001,
+       "end": 1790098444315
+      }
+     },
+     "id": "prt_0ca2e8d80001r7TaxwwFMtDwZH",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2e84cf001aO53Nj91xpAAFv"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_e7f279669519461981c8d394",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "Get-ChildItem -Recurse -File -Path \"C:\\Users\\ferna_fxhnpvd\\semana-academica\" | Where-Object { $_.FullName -notmatch 'node_modules|\\.git' } | Select-Object -ExpandProperty FullName"
+      },
+      "output": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\contrato-api.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\EQUIPE.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\projeto.json\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\README.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\package-lock.json\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\package.json\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\agent\\auditor.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\agent\\revisor-de-contrato.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\skills\\grilling\\SKILL.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\skills\\novo-subagente\\SKILL.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\skills\\tdd\\SKILL.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\skills\\to-spec\\SKILL.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\AGENTS.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\package-lock.json\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\package.json\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\tsconfig.json\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\data\\semana.db\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\db.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\db.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\db.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\db.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\server.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\server.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\server.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\server.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\middleware\\auth.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\middleware\\auth.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\middleware\\auth.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\middleware\\auth.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\atividades.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\atividades.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\atividades.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\atividades.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\encontros.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\encontros.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\encontros.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\encontros.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\presencas.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\presencas.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\presencas.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\presencas.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\salas.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\salas.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\salas.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\salas.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\teste.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\teste.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\teste.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\teste.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\db.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\server.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\types.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\middleware\\auth.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\atividades.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\encontros.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\salas.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\teste.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\encontros.spec.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\infraestrutura.spec.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas.spec.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\entrevistas\\M3-presenca.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\evidencias\\exportar-evidencias.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\specs\\M1-grade-de-atividades.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\specs\\M3-presenca.md\r\n",
+      "metadata": {
+       "output": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\contrato-api.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\EQUIPE.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\projeto.json\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\README.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\package-lock.json\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\package.json\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\agent\\auditor.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\agent\\revisor-de-contrato.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\skills\\grilling\\SKILL.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\skills\\novo-subagente\\SKILL.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\skills\\tdd\\SKILL.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\skills\\to-spec\\SKILL.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\AGENTS.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\package-lock.json\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\package.json\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\tsconfig.json\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\data\\semana.db\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\db.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\db.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\db.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\db.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\server.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\server.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\server.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\server.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\middleware\\auth.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\middleware\\auth.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\middleware\\auth.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\middleware\\auth.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\atividades.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\atividades.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\atividades.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\atividades.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\encontros.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\encontros.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\encontros.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\encontros.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\presencas.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\presencas.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\presencas.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\presencas.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\salas.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\salas.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\salas.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\salas.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\teste.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\teste.d.ts.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\teste.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\dist\\rotas\\teste.js.map\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\db.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\server.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\types.d.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\middleware\\auth.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\atividades.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\encontros.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\salas.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\teste.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\encontros.spec.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\infraestrutura.spec.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas.spec.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\entrevistas\\M3-presenca.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\evidencias\\exportar-evidencias.js\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\specs\\M1-grade-de-atividades.md\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\specs\\M3-presenca.md\r\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "Get-ChildItem -Recurse -File -Path \"C:\\Users\\ferna_fxhnpvd\\semana-academica\" | Where-Object { $_.FullName -notmatch 'node_modules|\\.git' } | Select-Object -ExpandProperty FullName",
+      "time": {
+       "start": 1790098444572,
+       "end": 1790098450744
+      }
+     },
+     "id": "prt_0ca2e8f04001a9CRQ71h2wQ3sL",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2e84cf001aO53Nj91xpAAFv"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-finish",
+     "tokens": {
+      "total": 10377,
+      "input": 993,
+      "output": 168,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 9216
+      }
+     },
+     "cost": 0,
+     "id": "prt_0ca2eac38001WTNKtQZfkNMm5q",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2e84cf001aO53Nj91xpAAFv"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 17664,
+     "input": 7225,
+     "output": 199,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 10240
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1790098452195,
+     "completed": 1790098460433
+    },
+    "finish": "tool-calls",
+    "id": "msg_0ca2eaee300137gPyeq4tFtHYB",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-start",
+     "id": "prt_0ca2ec194001r9TxMYLNUEkWJW",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2eaee300137gPyeq4tFtHYB"
+    },
+    {
+     "type": "reasoning",
+     "text": "Let me read the relevant source files and existing tests to understand the current state of the codebase.",
+     "time": {
+      "start": 1790098457059,
+      "end": 1790098457263
+     },
+     "id": "prt_0ca2ec1e3001bE1JZy25fOqrV2",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2eaee300137gPyeq4tFtHYB"
+    },
+    {
+     "type": "text",
+     "text": "\n\n",
+     "time": {
+      "start": 1790098457269,
+      "end": 1790098458963
+     },
+     "id": "prt_0ca2ec2b400131uED523UFGwVE",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2eaee300137gPyeq4tFtHYB"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_cb4e962a619f4e908d2dfab9",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts"
+      },
+      "output": "[9002 caracteres omitidos]",
+      "title": "api\\src\\rotas\\presencas.ts",
+      "time": {
+       "start": 1790098457909,
+       "end": 1790098458021
+      }
+     },
+     "id": "prt_0ca2ec2fd0015gxVKc8v8QsNT7",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2eaee300137gPyeq4tFtHYB"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_daddbb78d14b4ba9b9c1c7f5",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\server.ts"
+      },
+      "output": "[1524 caracteres omitidos]",
+      "title": "api\\src\\server.ts",
+      "time": {
+       "start": 1790098458703,
+       "end": 1790098458858
+      }
+     },
+     "id": "prt_0ca2ec7930011akPPEZ8YxIUhf",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2eaee300137gPyeq4tFtHYB"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_aaf82f5d4f2b4444a36a8108",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\db.ts"
+      },
+      "output": "[7091 caracteres omitidos]",
+      "title": "api\\src\\db.ts",
+      "time": {
+       "start": 1790098458955,
+       "end": 1790098459048
+      }
+     },
+     "id": "prt_0ca2ec87a001rWFRJW73Bh76Od",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2eaee300137gPyeq4tFtHYB"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-finish",
+     "tokens": {
+      "total": 17664,
+      "input": 7225,
+      "output": 199,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 10240
+      }
+     },
+     "cost": 0,
+     "id": "prt_0ca2ecc610017l36HQt1kAxnu1",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2eaee300137gPyeq4tFtHYB"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 23427,
+     "input": 5870,
+     "output": 149,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 17408
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1790098460446,
+     "completed": 1790098465578
+    },
+    "finish": "tool-calls",
+    "id": "msg_0ca2ecf1e001zcpJzLInhyiLeq",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-start",
+     "id": "prt_0ca2ed86c001HYFYe7VzeKWh11",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ecf1e001zcpJzLInhyiLeq"
+    },
+    {
+     "type": "reasoning",
+     "text": "Now let me look at the existing tests and the encontros.ts rotation logic.",
+     "time": {
+      "start": 1790098462834,
+      "end": 1790098463422
+     },
+     "id": "prt_0ca2ed87200157Tak9qhemif4G",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ecf1e001zcpJzLInhyiLeq"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_baec2da9153b4141b67fed81",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\encontros.ts"
+      },
+      "output": "[3648 caracteres omitidos]",
+      "title": "api\\src\\rotas\\encontros.ts",
+      "time": {
+       "start": 1790098463680,
+       "end": 1790098463953
+      }
+     },
+     "id": "prt_0ca2edac4001iht3JIQ7C6doEq",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ecf1e001zcpJzLInhyiLeq"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_741c1648b5c54f4296d8d1b2",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas.spec.ts"
+      },
+      "output": "[11688 caracteres omitidos]",
+      "title": "api\\verificacoes\\presencas.spec.ts",
+      "time": {
+       "start": 1790098463998,
+       "end": 1790098464162
+      }
+     },
+     "id": "prt_0ca2edbf10010hldgkt1ZRGret",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ecf1e001zcpJzLInhyiLeq"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-finish",
+     "tokens": {
+      "total": 23427,
+      "input": 5870,
+      "output": 149,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 17408
+      }
+     },
+     "cost": 0,
+     "id": "prt_0ca2ee09e001cmKo2RBYLTubYy",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ecf1e001zcpJzLInhyiLeq"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 29956,
+     "input": 5389,
+     "output": 1271,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 23296
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1790098465615,
+     "completed": 1790098495594
+    },
+    "finish": "tool-calls",
+    "id": "msg_0ca2ee34f001eJe1L4WLHue40W",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-start",
+     "id": "prt_0ca2eefe6001y6QfNrJozEGZL9",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ee34f001eJe1L4WLHue40W"
+    },
+    {
+     "type": "reasoning",
+     "text": "Now let me check the current code ordering in presencas.ts for the POST online route. Looking at the current code:\n\nCurrent order in the online POST:\n1. auth check (participant) — but wait, the route currently does NOT have profile check? Let me re-check. Line 58-64: checks usuario.papel !== \"participante\" → 403 SOMENTE_PARTICIPANTE. Wait the spec says order: identificação (401 USUARIO_DESCONHECIDO) → perfil (403). In this route, the check is participante only. Spec says POST presencas is for participante. OK.\n2. 404 NAO_ENCONTRADO\n3. Body validation: codigo must be 6 chars → DADOS_INVALIDOS\n4. lidoEm validation\n5. R12: presence already exists → 200\n6. R7: NAO_INSCRITO check\n7. R11: SINCRONIZACAO_TARDIA (offline, after 2h from fim)\n8. R6: FORA_DA_JANELA\n9. R14/R9: CODIGO_INVALIDO\n10. insert → 201\n\nNow slice 4 is: R13 precedence and R10 (no ATIVIDADE_CANCELADA on presence registration).\n\nLet me analyze what R13 requires:\n- Order: NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO\n\nLooking at the current code order in the PUT:\n1. Check inscrito\n2. Check sync tardia\n3. Check janela\n4. Check codigo\n\nThat seems to already match R13. Hmm. Let me carefully re-examine.\n\nWait — but there's the R12 check (existing presence → 200) before NAO_INSCRITO. That's fine, R12 happens before per spec (\"após as verificações gerais e a verificação de presença já existente (R12)\").\n\nSo actually the current implementation might already satisfy R13. But wait, the spec's slice 4 provides three acceptance criteria (21, 22, 23) that test R13. Let me check if the current implementation truly satisfies them:\n\nCriteria 21 (R13): POST of non-inscribed participant with invalid code → 403 NAO_INSCRITO (before CODIGO_INVALIDO). Current code: inscrito check before codigo check. ✓\n\nCriteria 22: POST with lidoEm within window, wrong code, and send after 2h after fim → 422 SINCRONIZACAO_TARDIA (before FORA_DA_JANELA and CODIGO_INVALIDO). Current code: sync check before janela and codigo. ✓\n\nCriteria 23: POST with wrong code and lidoEm out of window → 422 FORA_DA_JANELA (before CODIGO_INVALIDO). Current code: janela check before codigo. ✓\n\nHmm, so the current implementation already seems to match R13. But also R10: no ATIVIDADE_CANCELADA in the presence route. The current POST presencas route doesn't check for cancellation. ✓\n\nSo slice 4 might essentially already be implemented. But the task is to follow TDD: write test first, run showing fail, then minimal code. So I need to figure out whether the tests actually already pass. If they already pass, the TDD cycle says \"Teste que passa antes do código existir não está testando nada — descubra por quê antes de seguir.\"\n\nWait, but maybe there's a subtle part. Let me re-look at R11's sync tardia check more carefully in the current code:\n\n```js\nif (offline) {\n  const limiteSincronizacao = fim + 2 * 60 * 60 * 1000;\n  if (agoraMs > limiteSincronizacao) {\n    return reply.code(422)...\n  }\n}\n```\n\nThat's considered \"offline\" when lidoEm present. OK.\n\nNow R13's criterion 22: \"POST `/encontros/:id/presencas` com `lidoEm` dentro da janela, código errado e envio após 2 h do `fim` → 422 SINCRONIZACAO_TARDIA (antes de FORA_DA_JANELA e CODIGO_INVALIDO)\". Current: sync check is after inscrito, before janela/codigo. ✓\n\nHmm. So maybe slice 4 is already done? But the task says implement slice 4 following TDD. Maybe the tests do not yet exist for R13/R10, and the code may not fully match. But it seems to be already implemented.\n\nWait — maybe there's a subtlety in the ordering relative to R12 and the whole flow. But criteria 21-23 all seem satisfiable.\n\nBut actually, let me re-check criterion 22 more carefully. Where is the sync check relative to the inscrito check? In R13 precedence, NAO_INSCRITO comes first. Current code: inscrito check (line 117-127) before sync (line 132). ✓.\n\nHmm interesting. Let me check the offline spec to see what's already tested there (Slice 3).",
+     "time": {
+      "start": 1790098468898,
+      "end": 1790098492958
+     },
+     "id": "prt_0ca2ef022001Uw518YZhSINmLi",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ee34f001eJe1L4WLHue40W"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_62b03a3ff53b4886ac007bc9",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts"
+      },
+      "output": "[6507 caracteres omitidos]",
+      "title": "api\\verificacoes\\presencas-offline.spec.ts",
+      "time": {
+       "start": 1790098493641,
+       "end": 1790098493874
+      }
+     },
+     "id": "prt_0ca2f4e290017a2TDN2wq7owjn",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ee34f001eJe1L4WLHue40W"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_1f89919296434f64a0bb5e0e",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\teste.ts"
+      },
+      "output": "[1250 caracteres omitidos]",
+      "title": "api\\src\\rotas\\teste.ts",
+      "time": {
+       "start": 1790098493827,
+       "end": 1790098494182
+      }
+     },
+     "id": "prt_0ca2f50d3001DEK1SfmwKKFVaN",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ee34f001eJe1L4WLHue40W"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-finish",
+     "tokens": {
+      "total": 29956,
+      "input": 5389,
+      "output": 1271,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 23296
+      }
+     },
+     "cost": 0,
+     "id": "prt_0ca2f55d3001l71RkeJsWkjen0",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ee34f001eJe1L4WLHue40W"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 35105,
+     "input": 2709,
+     "output": 2444,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 29952
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1790098495607,
+     "completed": 1790098534893
+    },
+    "finish": "tool-calls",
+    "id": "msg_0ca2f58770012v1w8IMaASq2Kk",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-start",
+     "id": "prt_0ca2f60630010OLq7AQtGoSvY2",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2f58770012v1w8IMaASq2Kk"
+    },
+    {
+     "type": "reasoning",
+     "text": "Now I understand the project structure. The slice 4 tests for R13 and R10:\n\nCriteria for slice 4:\n- 21. (R13) POST não inscrito com código inválido → 403 NAO_INSCRITO (antes de CODIGO_INVALIDO)\n- 22. (R13) POST com lidoEm dentro da janela, código errado e envio após 2h do fim → 422 SINCRONIZACAO_TARDIA (antes de FORA_DA_JANELA e CODIGO_INVALIDO)\n- 23. (R13) POST com código errado e lidoEm fora da janela → 422 FORA_DA_JANELA (antes de CODIGO_INVALIDO)\n- 16. (R10) Não devolve ATIVIDADE_CANCELADA no POST de presença mesmo com atividade cancelada.\n\nNow, looking at current implementation of POST /encontros/:id/presencas in presencas.ts:\n\nOrder in current code:\n1. User papel check → SOMENTE_PARTICIPANTE (403). Hmm wait, this is perfil check. Spec says order: identificação (401) → perfil (403). But that's the general contract order. Actually for the presencas route spec line says POST presencas \"participante\". So only participants. Fine.\n\nWait, but the check here is: `if (!usuario || usuario.papel !== \"participante\") return 403 SOMENTE_PARTICIPANTE`. But it should first check existence (401 USUARIO_DESCONHECIDO) — that's handled by the middleware verifyAuth presumably. OK.\n\n2. 404 NAO_ENCONTRADO for encontro\n3. Body: codigo 6 chars → DADOS_INVALIDOS\n4. lidoEm parse\n5. R12: check existing presence → 200\n6. NAO_INSCRITO check\n7. SINCRONIZACAO_TARDIA check (offline)\n8. FORA_DA_JANELA check\n9. CODIGO_INVALIDO check\n10. insert → 201\n\nWait, this order already matches R13: NAO_INSCRITO (6) → SINCRONIZACAO_TARDIA (7) → FORA_DA_JANELA (8) → CODIGO_INVALIDO (9). \n\nSo the current implementation might already pass criteria 21, 22, 23. And R10 already satisfied (no cancellation check in presencas route).\n\nHmm. So the slice 4 code may already be implemented. But per TDD, I need to write tests first, watch them fail, then minimal code. But if the code already implements slice 4 correctly... the tests would pass immediately, violating the TDD rule that test must fail first.\n\nWait, let me re-read. Actually, maybe the current implementation was written to already cover slice 4 (the previous slices were implemented) but without explicit tests for R13/R10. Per the skill: \"Teste que passa antes do código existir não está testando nada — descubra por quê antes de seguir.\"\n\nBut the task says to implement slice 4 following TDD: write test, run, show it failing, then minimal code.\n\nHmm. But maybe the current implementation doesn't fully match R13 ordering. Let me look carefully again.\n\nActually wait — let me re-read the R13 spec. The precedence is: `NAO_INSCRITO` → `SINCRONIZACAO_TARDIA` → `FORA_DA_JANELA` → `CODIGO_INVALIDO`. And the general order: identificação → perfil → existência do encontro → corpo → regras do recurso. And R12 (existing presence 200) happens before these.\n\nCurrent code:\n- user check (perfil)\n- nao encontrado\n- corpo (codigo, lidoEm)\n- existente (R12)\n- inscrito (NAO_INSCRITO)\n- sincronizacao tardia\n- fora da janela\n- codigo invalido\n\nYes, matches exactly.\n\nSo slice 4 is likely already implemented in code. Hmm.\n\nWait — but maybe the current implementation is subtly wrong. Let me look at the check order once more... Actually there's an important subtlety in criterion 22: \"POST with lidoEm within window, wrong code and send after 2h after fim → SINCRONIZACAO_TARDIA (before FORA_DA_JANELA and CODIGO_INVALIDO).\"\n\nCurrent: sincronizacao check comes before janela and codigo. ✓\n\nCriterion 23: \"POST with wrong code and lidoEm out of window → FORA_DA_JANELA (before CODIGO_INVALIDO)\". Current: janela before codigo ✓.\n\nCriterion 21: not inscribed with invalid code → NAO_INSCRITO (before CODIGO_INVALIDO). Current: inscrito before codigo ✓.\n\nHmm so all R13 criteria should already pass. That means I'd be writing tests that pass immediately. Per TDD skill that's not testing anything new. But the user asked to implement slice 4 following TDD.\n\nLet me reconsider - maybe the existing code was implemented with slice 4 rules already (perhaps accidentally included during slice 3 implementation), OR maybe I'm missing the fact that order is wrong in some edge. Let me trace criterion 22 precisely with current code:\n\nSetup: relogio at, say, 13:00:01 (2h1s after fim 11:00). lidoEm = 10:15:30 (within window). lidoEm is within window so instanteEfetivo = 10:15:30. codigo is \"wrong\" - but wait, to be \"wrong\" it must not be current/previous window code at 10:15:30.\n\nCode flow:\n- corretamente passa inscrito check (inscrito confirmado)\n- offline = true (`lidoEm = 10:15:30`)\n- limiteSincronizacao = 11:00 + 2h = 13:00. agoraMs = 13:00:01 > 13:00 → 422 SINCRONIZACAO_TARDIA ✓\n\nGood, passes.\n\nCriterion 21: not inscribed, invalid code:\n- inscrito check fails → 403 NAO_INSCRITO ✓\n\nCriterion 23: wrong code, lidoEm out of window:\n- lidoEm, say 09:00 (16 min before inicio → outside [inicio-15, inicio+30]).\n- offline = true, lidoMs valid, instanteEfetivo = 09:00 (min(lidoMs, agoraMs)). agoraMs must be within 2h of fim. Say relogio = 10:15:30, lidoEm = 09:00 → instante = 09:00.\n- inscrito ok\n- sincronizacao: agoraMs 10:15:30 < 13:00 ok\n- janela: instanteEfetivo 09:00 < 09:45 (inicio-15) → FORA_DA_JANELA ✓\n\nAll pass. So the implementation already satisfies slice 4. So tests would pass at once.\n\nHmm, but the TDD skill says test must fail first. However, the reality is the code already implemented these rules (probably because previous slices' implementations, slice 2 and 3, already had the ordering right, which naturally satisfied R13). R10 also naturally satisfied because presencas route never checked cancellation.\n\nSo this is a case where the functionality already exists. The TDD rule in the skill: \"Teste que passa antes do código existir não está testando nada — descubra por quê antes de seguir.\" Well, the reason is that the code already implements it (perhaps because the ordering was naturally correct). This is legit: the green isn't a lie; the spec's rule is already satisfied by implementation details. But the task instruction is explicit: follow TDD, write test, run showing fail, then minimal code.\n\nHmm, but honestly, I should check whether perhaps the current code order does NOT satisfy slice 4 in the actual naming. Wait — actually let me reconsider. Let me look at where SINCRONIZACAO_TARDIA is checked relative to existing presence (R12). Spec order: R13 says \"após as verificações gerais e a verificação de presença já existente (R12)\". So R12 (200) first, then NAO_INSCRITO etc. Current code has R12 before inscrito. ✓ Good.\n\nOK so maybe slice 4 is already fully implemented. But I need to confirm the tests run and pass. Since the user asked me to implement slice 4 following TDD and demonstrate failing tests, but if the code already satisfies it, I can't show a failing test for the real behavior.\n\nWait, actually. Let me re-check. Maybe the code is NOT currently ordered per R13. Let me look at the presencas.ts again carefully...\n\nLines 105-115: existing check (200).\nLines 117-127: inscrito check (403 NAO_INSCRITO).\nLines 129-130: inicio, fim.\nLines 132-140: if offline, sincronizacao tardia check (422).\nLines 142-147: fora da janela check (422).\nLines 149-154: codigo invalido check (422).\n\nThat IS R13 order. So slice 4 R13 is already implemented.\n\nHmm wait, but could it be that the actual repo's committed state is that presencas.ts was written this way during slice 2 and 3? Possibly. So slice 4 behavior already exists.\n\nGiven this, what should I do? The honest TDD approach: Write the tests for slice 4 criteria (21, 22, 23, 16). Run them. They likely pass because implementation already satisfies them. Per the skill, a test that passes before implementation exists \"isn't testing anything\" — but here the implementation does exist. The rule is about not faking green. If the code already has the behavior, the tests genuinely verify it. But the user explicitly wants me to show failing tests first.\n\nAlternatively, maybe the repo state is such that slice 4 code is NOT yet written. Let me double-check: is presencas.ts the current source? Maybe there are other files... The task said \"Implemente somente a Fatia 4\". Perhaps the previous slices were implemented but the code already contains slice 4 because the developer wrote it while doing slice 3.\n\nLet me verify by running the full test suite first to see current state.\n\nActually, I should first run the tests to see current green/red state. Let me check package.json for the test command.",
+     "time": {
+      "start": 1790098497641,
+      "end": 1790098532226
+     },
+     "id": "prt_0ca2f60690019QeW3AzosrGfFv",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2f58770012v1w8IMaASq2Kk"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_03ec773295fd45a3afa6e99e",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\package.json"
+      },
+      "output": "[808 caracteres omitidos]",
+      "title": "api\\package.json",
+      "time": {
+       "start": 1790098532835,
+       "end": 1790098533177
+      }
+     },
+     "id": "prt_0ca2fe788001Hkzdomaon7G2JK",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2f58770012v1w8IMaASq2Kk"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_f4b99b2acfb94edca05c9c1a",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\middleware\\auth.ts"
+      },
+      "output": "[1761 caracteres omitidos]",
+      "title": "api\\src\\middleware\\auth.ts",
+      "time": {
+       "start": 1790098533086,
+       "end": 1790098533403
+      }
+     },
+     "id": "prt_0ca2fe9ec001zTWE8U6rHdHqGf",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2f58770012v1w8IMaASq2Kk"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-finish",
+     "tokens": {
+      "total": 35105,
+      "input": 2709,
+      "output": 2444,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 29952
+      }
+     },
+     "cost": 0,
+     "id": "prt_0ca2fef0c0017ZQXe5V7BPnYMd",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2f58770012v1w8IMaASq2Kk"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 37733,
+     "input": 971,
+     "output": 1690,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 35072
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1790098534905,
+     "completed": 1790098567988
+    },
+    "finish": "tool-calls",
+    "id": "msg_0ca2ff1f9001nfB2CryT3tO0Z0",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-start",
+     "id": "prt_0ca2ffa5c00174Nh2WJIu6r6b6",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ff1f9001nfB2CryT3tO0Z0"
+    },
+    {
+     "type": "reasoning",
+     "text": "Now, let me think about the current implementation state and slice 4.\n\nSlice 4 requirements:\n- R13: precedence NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO\n- R10: no ATIVIDADE_CANCELADA in the presence route\n\nLooking at the current code in presencas.ts, the checks appear to already be in R13 order:\n1. found encontro\n2. corpo codigo validation\n3. existing presence (R12 → 200)\n4. NAO_INSCRITO check\n5. SINCRONIZACAO_TARDIA (offline)\n6. FORA_DA_JANELA\n7. CODIGO_INVALIDO\n\nSo it seems slice 4 is already implemented? Let me look more carefully.\n\nCurrent order:\n- Line 58-64: papel check SOMENTE_PARTICIPANTE\n- Line 66-81: encontro exists (NAO_ENCONTRADO)\n- Line 84-90: codigo validation (DADOS_INVALIDOS)\n- Line 92-103: lidoEm validation\n- Line 105-115: existing presence → 200 (R12)\n- Line 117-127: inscrito check → NAO_INSCRITO\n- Line 132-140: offline sincronizacao tardia\n- Line 142-147: FORA_DA_JANELA\n- Line 149-154: CODIGO_INVALIDO\n\nHmm, so the ordering already matches R13. Wait, but is the SINCRONIZACAO_TARDIA check correctly before FORA_DA_JANELA? Yes, line 132 before line 142.\n\nSo maybe slice 4 is already effectively done by accident? But the tests for R13/R10 might not exist. Let me check the existing tests — presencas.spec.ts covers slices 2 (and part of slice 4?). Actually, the existing test suite covers R6, R7, R8, R9, R12, R14, R5. The offline spec covers R11. \n\nNone of these test R13 precedence or R10. So slice 4 tests don't exist yet.\n\nBut wait — the TDD rule says: \"Teste que passa antes do código existir não está testando nada — descubra por quê antes de seguir.\"\n\nIf the code already implements R13 correctly, then writing a test that passes would violate that. Let me carefully re-examine the precedence rules.\n\nR13: precedence after general checks and existing presence (R12): NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO.\n\nHmm, wait. There might be subtleties. Let me examine criterion 23:\n- POST with wrong code and lidoEm out of window → 422 FORA_DA_JANELA (before CODIGO_INVALIDO). Test: lidoEm must be within... no, outside window. But wait — if lidoEm is outside the window AND the code is wrong at that instant... Current code: instanteEfetivo is min(lidoMs, agoraMs). For the FORA_DA_JANELA check it's checked first, returns FORA_DA_JANELA. OK passes.\n\nBut wait, there's the consideration that if lidoEm is outside the window, the code might not even be checkable. Current code returns FORA_DA_JANELA first. Good.\n\nCriterion 22: lidoEm within window, wrong code, and send after 2h after fim → SINCRONIZACAO_TARDIA (before FORA_DA_JANELA and CODIGO_INVALIDO). Current code: sincronizacao check first (line 132), before FORA_DA_JANELA (line 142) and CODIGO_INVALIDO (line 149). But wait — is NAO_INSCRITO checked before? Yes. So if the participant is inscribed (confirmada), the sync check happens. Good.\n\nBut wait, is the SINCRONIZACAO_TARDIA check positioned correctly relative to the criterion? The criterion says \"envio após 2 h do fim\". agoraMs > fim + 2h. Current check: `if (agoraMs > limiteSincronizacao)`. Good.\n\nCriterion 21: not inscribed with invalid code → 403 NAO_INSCRITO (before CODIGO_INVALIDO). Current: inscrito check (line 117) before codigo check (line 149). Good.\n\nSo it seems R13 is already implemented correctly in the current code. Hmm.\n\nBut wait — is it? Perhaps the current code was derived from implementing slices 2 and 3, and ordering happens to already satisfy R13. But TDD says: if the test passes before implementing, it's not testing anything. However, the situation might be that the current implementation was written in a way that already handles slice 4 rules. \n\nActually, wait. Let me reconsider. Maybe the current code wasn't intended to satisfy R13 but does so. In that case, since the user asked me to strictly follow TDD (write failing test → implement → green), I should verify whether the tests actually pass now. If they pass, I need to \"descubra por quê\" — and the reason is the code already implements the precedence.\n\nBut hold on — maybe the current code is NOT yet the slice 4 state. Let me re-read the git status / current state. Actually the task says \"Implemente somente a Fatia 4\". Maybe slice 4 code is not yet implemented in the committed state. But presencas.ts clearly has the ordering. Hmm, but let me check whether the checks are precisely in the right order.\n\nActually wait, let me re-examine the order more carefully:\n\n1. Line 105-115: existing presence (R12) → 200\n2. Line 117-127: NAO_INSCRITO\n3. Line 132-140: SINCRONIZACAO_TARDIA (only when offline)\n4. Line 142-147: FORA_DA_JANELA\n5. Line 149-154: CODIGO_INVALIDO\n\nThis matches R13 exactly. Unless... the current code has the existing presence check but the \"already have presence\" check for online, or something.\n\nHmm, so it already seems implemented. But wait - maybe there is something subtle. The task says slice 4 = R13 precedence + R10. Let me check R10: \"a rota não checa a situação de cancelada da atividade e nunca devolve esse erro\". Current code: there's no cancellation check in presencas.ts. ✓ Already implemented.\n\nSo slice 4 might already be fully implemented?! Let me run tests to see current state.\n\nActually let me check git log to understand what state we're at.\n\nLet me run the tests first to see the current state.",
+     "time": {
+      "start": 1790098537079,
+      "end": 1790098557045
+     },
+     "id": "prt_0ca2ffa77001EeYs7RzFnvJGyk",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ff1f9001nfB2CryT3tO0Z0"
+    },
+    {
+     "type": "text",
+     "text": "Let me check the current test state and git history to understand where slice 4 stands.",
+     "time": {
+      "start": 1790098557060,
+      "end": 1790098558155
+     },
+     "id": "prt_0ca3048840015J69gQJoq1jDJl",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ff1f9001nfB2CryT3tO0Z0"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_32c6cb482c2b40b49ced6835",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "npm test 2>&1 | Select-Object -Last 60",
+       "workdir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+       "timeout": 180000
+      },
+      "output": "\r\n> semana-academica-api@1.0.0 test\r\n> tsx --test verificacoes/*.spec.ts\r\n\r\n▶ M3 Fatia 1 - Código do encontro\r\n  ✔ R4 - consultas na mesma janela devolvem o mesmo código; na janela seguinte, outro (260.3969ms)\r\n  ✔ R3 - relógio em 10:15:30: trocaEm=10:16:00 e validoAte=10:17:00 (63.3454ms)\r\n  ✔ R2 - encontro de atividade cancelada (relógio dentro da janela) retorna 422 ATIVIDADE_CANCELADA (50.6165ms)\r\n  ✔ R1 - fora da janela 16 min antes do início retorna 422 FORA_DA_JANELA (51.5383ms)\r\n  ✔ R1 - fora da janela 31 min após o início retorna 422 FORA_DA_JANELA (37.4581ms)\r\n  ✔ R1 - bordas da janela de obtenção: início - 15 min e início + 30 min retornam 200 (47.6068ms)\r\n✔ M3 Fatia 1 - Código do encontro (778.6782ms)\r\n▶ Modo de teste - infraestrutura\r\n  ✔ POST /_teste/reset retorna 204 (160.4714ms)\r\n  ✔ após reset, GET /_teste/relogio retorna o relógio inicial 2026-10-13T09:00:00-03:00 (48.2973ms)\r\n  ✔ após reset, dados iniciais de usuários são carregados (52.4642ms)\r\n  ✔ após reset, dados iniciais de salas são carregados (42.61ms)\r\n  ✔ sem MODO_TESTE, rotas /_teste/* retornam 404 (121.2269ms)\r\n✔ Modo de teste - infraestrutura (694.3147ms)\r\n▶ M3 Fatia 3 - Presença offline (lidoEm)\r\n  ✔ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (275.7993ms)\r\n  ✔ R11 - POST com lidoEm dentro da janela, mas envio após 2h do fim do encontro retorna 422 SINCRONIZACAO_TARDIA (92.8363ms)\r\n  ✔ R11 - POST com lidoEm posterior ao envio valida janela e código pelo instante do envio (70.8101ms)\r\n✔ M3 Fatia 3 - Presença offline (lidoEm) (707.8624ms)\r\n▶ M3 Fatia 2 - Presença online básica\r\n  ✔ R8 - POST sem lidoEm de inscrito confirmado retorna 201 com origem='qr' e lidoEm=registradaEm=relógio (241.1311ms)\r\n  ✔ R7 - POST de participante com inscrição em_espera retorna 403 NAO_INSCRITO (77.3732ms)\r\n  ✔ R6 - POST com relógio fora de [inicio-15, inicio+30] retorna 422 FORA_DA_JANELA (71.5142ms)\r\n  ✔ R6 - POST com relógio em inicio+30 min:00 (borda) retorna 201 (59.492ms)\r\n  ✔ R9 - POST com código que nunca foi gerado retorna 422 CODIGO_INVALIDO (41.8736ms)\r\n  ✔ R14 - POST com o código da janela anterior (dentro da janela de presença) retorna 201 (45.5285ms)\r\n  ✔ R12 - segundo POST do mesmo participante/encontro retorna 200 mantendo lidoEm/registradaEm/origem (46.3789ms)\r\n  ✔ R9 - POST com código já expirado (fora das janelas atual e anterior) retorna 422 CODIGO_INVALIDO (37.0582ms)\r\n  ✔ R5 - validade do código é restrita ao par (encontro, janela): código de outro encontro é rejeitado (80.0635ms)\r\n✔ M3 Fatia 2 - Presença online básica (981.3925ms)\r\nℹ tests 23\r\nℹ suites 4\r\nℹ pass 23\r\nℹ fail 0\r\nℹ cancelled 0\r\nℹ skipped 0\r\nℹ todo 0\r\nℹ duration_ms 2990.9248\r\n",
+      "metadata": {
+       "output": "\r\n> semana-academica-api@1.0.0 test\r\n> tsx --test verificacoes/*.spec.ts\r\n\r\n▶ M3 Fatia 1 - Código do encontro\r\n  ✔ R4 - consultas na mesma janela devolvem o mesmo código; na janela seguinte, outro (260.3969ms)\r\n  ✔ R3 - relógio em 10:15:30: trocaEm=10:16:00 e validoAte=10:17:00 (63.3454ms)\r\n  ✔ R2 - encontro de atividade cancelada (relógio dentro da janela) retorna 422 ATIVIDADE_CANCELADA (50.6165ms)\r\n  ✔ R1 - fora da janela 16 min antes do início retorna 422 FORA_DA_JANELA (51.5383ms)\r\n  ✔ R1 - fora da janela 31 min após o início retorna 422 FORA_DA_JANELA (37.4581ms)\r\n  ✔ R1 - bordas da janela de obtenção: início - 15 min e início + 30 min retornam 200 (47.6068ms)\r\n✔ M3 Fatia 1 - Código do encontro (778.6782ms)\r\n▶ Modo de teste - infraestrutura\r\n  ✔ POST /_teste/reset retorna 204 (160.4714ms)\r\n  ✔ após reset, GET /_teste/relogio retorna o relógio inicial 2026-10-13T09:00:00-03:00 (48.2973ms)\r\n  ✔ após reset, dados iniciais de usuários são carregados (52.4642ms)\r\n  ✔ após reset, dados iniciais de salas são carregados (42.61ms)\r\n  ✔ sem MODO_TESTE, rotas /_teste/* retornam 404 (121.2269ms)\r\n✔ Modo de teste - infraestrutura (694.3147ms)\r\n▶ M3 Fatia 3 - Presença offline (lidoEm)\r\n  ✔ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (275.7993ms)\r\n  ✔ R11 - POST com lidoEm dentro da janela, mas envio após 2h do fim do encontro retorna 422 SINCRONIZACAO_TARDIA (92.8363ms)\r\n  ✔ R11 - POST com lidoEm posterior ao envio valida janela e código pelo instante do envio (70.8101ms)\r\n✔ M3 Fatia 3 - Presença offline (lidoEm) (707.8624ms)\r\n▶ M3 Fatia 2 - Presença online básica\r\n  ✔ R8 - POST sem lidoEm de inscrito confirmado retorna 201 com origem='qr' e lidoEm=registradaEm=relógio (241.1311ms)\r\n  ✔ R7 - POST de participante com inscrição em_espera retorna 403 NAO_INSCRITO (77.3732ms)\r\n  ✔ R6 - POST com relógio fora de [inicio-15, inicio+30] retorna 422 FORA_DA_JANELA (71.5142ms)\r\n  ✔ R6 - POST com relógio em inicio+30 min:00 (borda) retorna 201 (59.492ms)\r\n  ✔ R9 - POST com código que nunca foi gerado retorna 422 CODIGO_INVALIDO (41.8736ms)\r\n  ✔ R14 - POST com o código da janela anterior (dentro da janela de presença) retorna 201 (45.5285ms)\r\n  ✔ R12 - segundo POST do mesmo participante/encontro retorna 200 mantendo lidoEm/registradaEm/origem (46.3789ms)\r\n  ✔ R9 - POST com código já expirado (fora das janelas atual e anterior) retorna 422 CODIGO_INVALIDO (37.0582ms)\r\n  ✔ R5 - validade do código é restrita ao par (encontro, janela): código de outro encontro é rejeitado (80.0635ms)\r\n✔ M3 Fatia 2 - Presença online básica (981.3925ms)\r\nℹ tests 23\r\nℹ suites 4\r\nℹ pass 23\r\nℹ fail 0\r\nℹ cancelled 0\r\nℹ skipped 0\r\nℹ todo 0\r\nℹ duration_ms 2990.9248\r\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "npm test 2>&1 | Select-Object -Last 60",
+      "time": {
+       "start": 1790098557832,
+       "end": 1790098566414
+      }
+     },
+     "id": "prt_0ca304896001fF6Z0vJwWh1bxw",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ff1f9001nfB2CryT3tO0Z0"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_230dc706172b4aab99d72d70",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "git log --oneline -15; git status --short",
+       "workdir": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+      },
+      "output": "e716b17 M3-R11: implementa sincronizacao offline\n0f52b3b M3-R5-R14: implementa presença online básica\nfd1f6e2 M3-R1-R4: implementa obtenção e rotação do código\n771325d M3: adiciona especificação de presença por QR\n4dfe32f M3: rodada 2 e decisões finais\n3d79100 M3: rodada 1\n49a86ea registra responsável pelo módulo M3\n28645f3 feat: implementa API da semana academica\nd34690a M1: adiciona  especificação e revisor de contrato\n251ecac Inclui o subagente auditor\n407b5cf Update README.md\n0c20ac8 Repositório inicial do projeto final: Semana Acadêmica\n",
+      "metadata": {
+       "output": "e716b17 M3-R11: implementa sincronizacao offline\n0f52b3b M3-R5-R14: implementa presença online básica\nfd1f6e2 M3-R1-R4: implementa obtenção e rotação do código\n771325d M3: adiciona especificação de presença por QR\n4dfe32f M3: rodada 2 e decisões finais\n3d79100 M3: rodada 1\n49a86ea registra responsável pelo módulo M3\n28645f3 feat: implementa API da semana academica\nd34690a M1: adiciona  especificação e revisor de contrato\n251ecac Inclui o subagente auditor\n407b5cf Update README.md\n0c20ac8 Repositório inicial do projeto final: Semana Acadêmica\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "git log --oneline -15; git status --short",
+      "time": {
+       "start": 1790098558131,
+       "end": 1790098560878
+      }
+     },
+     "id": "prt_0ca304b97001jNytwQzNCOnWdw",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ff1f9001nfB2CryT3tO0Z0"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-finish",
+     "tokens": {
+      "total": 37733,
+      "input": 971,
+      "output": 1690,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 35072
+      }
+     },
+     "cost": 0,
+     "id": "prt_0ca3070340010iGi8gSe0C9wv0",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca2ff1f9001nfB2CryT3tO0Z0"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 51109,
+     "input": 1415,
+     "output": 12062,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 37632
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1790098568001,
+     "completed": 1790098730744
+    },
+    "finish": "tool-calls",
+    "id": "msg_0ca307341001Ep4HSzV7sMtgjr",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "snapshot": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "type": "step-start",
+     "id": "prt_0ca3087ae001ZO11636JiiERim",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca307341001Ep4HSzV7sMtgjr"
+    },
+    {
+     "type": "reasoning",
+     "text": "The tests all pass currently (23 tests). The current implementation appears to already handle slice 4? Let me analyze more carefully.\n\nSlice 4 is R13 (precedence) and R10 (no ATIVIDADE_CANCELADA on presence record).\n\nLet me look at the current presencas.ts code ordering:\n1. Check user is participant (SOMENTE_PARTICIPANTE)\n2. Find the encontro (404 NAO_ENCONTRADO)\n3. Validate codigo body (422 DADOS_INVALIDOS)\n4. Parse lidoEm\n5. Check existing presence (R12 → 200)\n6. Check inscrito (NAO_INSCRITO)\n7. Check SINCRONIZACAO_TARDIA (offline)\n8. Check FORA_DA_JANELA\n9. Check CODIGO_INVALIDO\n10. Insert → 201\n\nR13 precedence: NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO. The current code seems to already implement this order! \n\nWait, but is that really the case? Let me check. The order in the code:\n- NAO_INSCRITO (line 117-127)\n- SINCRONIZACAO_TARDIA (line 132-140)\n- FORA_DA_JANELA (line 142-147)\n- CODIGO_INVALIDO (line 149-154)\n\nYes, that matches R13. So slice 4 might already be implemented in the current code? Hmm, but no tests exist for R13/R10 specifically.\n\nWait, but this looks like the code was written during slice 2/3 development and may have accidentally implemented slice 4 already. Let me think about whether there could be cases where the precedence is wrong.\n\nActually wait — let me look more carefully. R13 applies \"após as verificações gerais e a verificação de presença já existente (R12)\". So the order is:\n1. gerais (401/403/404/422 corpo)\n2. R12 (existing → 200)\n3. NAO_INSCRITO\n4. SINCRONIZACAO_TARDIA\n5. FORA_DA_JANELA\n6. CODIGO_INVALIDO\n\nThe current code matches. R10 says the POST route never returns ATIVIDADE_CANCELADA. The code doesn't check `situacao`. So R10 is already satisfied.\n\nSo slice 4 appears already implemented in the code. Tests are needed. However, the task says \"Implemente somente a Fatia 4 de ../specs/M3-presenca.md. Siga TDD: para cada comportamento, escreva primeiro o teste, execute e mostre ele falhando, e somente depois implemente o código mínimo necessário para fazê-lo passar.\"\n\nHmm. If the code already implements the behavior, the test will pass immediately. But the skill says: \"Teste que passa antes do código existir não está testando nada — descubra por quê antes de seguir.\"\n\nWait — but maybe the current code is NOT actually fully compliant? Let me think about edge cases for R13.\n\nCriterion 21 (R13): POST de participante não inscrito com código inválido → 403 NAO_INSCRITO (antes de CODIGO_INVALIDO). Current code: NAO_INSCRITO check is before CODIGO_INVALIDO. ✓\n\nCriterion 22 (R13): POST com lidoEm dentro da janela, código errado e envio após 2h do fim → 422 SINCRONIZACAO_TARDIA (antes de FORA_DA_JANELA e CODIGO_INVALIDO). Current: SINCRONIZACAO_TARDIA before FORA_DA_JANELA and CODIGO_INVALIDO. ✓\n\nCriterion 23 (R13): POST com código errado e lidoEm fora da janela → 422 FORA_DA_JANELA (antes de CODIGO_INVALIDO). Current: FORA_DA_JANELA before CODIGO_INVALIDO. ✓\n\nCriterion 16 (R10): POST não devolve ATIVIDADE_CANCELADA. Current doesn't check cancelada. ✓\n\nSo all 4 slice-4 behaviors seem already implemented. Hmm. But wait, the task is to implement slice 4 via TDD. If all already pass... I need to check whether the tests exist. There are no tests yet for R13/R10. Let me verify by checking existing spec files. The presencas.spec.ts (fatia 2) and presencas-offline.spec.ts (fatia 3) exist. No fatia 4 spec file.\n\nSo the situation: the code seems to already have slice 4 behavior. But the user wants TDD: write test first, show it failing, then implement minimal code. If the code already implements it, tests would pass immediately, which violates the TDD rule \"Teste que passa antes do código existir não está testando nada\".\n\nWait, but maybe I'm reading the current code incorrectly. Let me consider: is it possible that the code passes the \"A regra que não se quebra\" requirement? The skill says when a test fails, suspect the code, not the test. And a test that passes before the code exists is not testing anything.\n\nBut here the \"code exists\" — the previous slices (2 and 3) were implemented together, and the developer may have written the full POST handler with correct precedence order already. In that case slice 4's behaviors are already present in code but untested.\n\nHmm. But actually, let me re-read the current code more carefully to see whether R13 precedence truly holds. Look at lines 129-154:\n\n```js\nconst inicio = new Date(encontro.inicio as string).getTime();\nconst fim = new Date(encontro.fim as string).getTime();\n\nif (offline) {\n  const limiteSincronizacao = fim + 2 * 60 * 60 * 1000;\n  if (agoraMs > limiteSincronizacao) {\n    return reply.code(422).send({ erro: \"SINCRONIZACAO_TARDIA\", ... });\n  }\n}\n\nif (instanteEfetivo < inicio - MINUTOS_ANTES || instanteEfetivo > inicio + MINUTOS_DEPOIS) {\n  return reply.code(422).send({ erro: \"FORA_DA_JANELA\", ... });\n}\n\nif (!codigoEhValido(id, corpo.codigo, instanteEfetivo)) {\n  return reply.code(422).send({ erro: \"CODIGO_INVALIDO\", ... });\n}\n```\n\nYes, this is correct order. And NAO_INSCRITO was earlier. So R13 is satisfied.\n\nSo, from a strict TDD perspective, I'd write the tests, run them, and they would pass already... The skill says test must fail first. But the reality might be that the code already implements it. Let me double-check whether there might be a subtle bug in the current implementation that a correct slice-4 test would catch.\n\nActually wait — let me reconsider. R13 says precedence in the POST online, AFTER \"as verificações gerais\". The \"verificações gerais\" include identifying the user (401), profile (403), existence of encontro (404), body (422 DADOS_INVALIDOS). Also, before R12 — hmm, R13 says \"após as verificações gerais e a verificação de presença já existente (R12)\". So R12 comes before the precedence. Good.\n\nNow, one subtlety: criterion 22 uses lidoEm within janela, código errado, envio após 2h do fim. In current code, when offline, instanteEfetivo = min(lidoMs, agoraMs). But SINCRONIZACAO_TARDIA uses agoraMs > fim + 2h. Let's set: lidoEm is within janela (e.g., 10:15:30), envio at 13:00:01 (fim=11:00, +2h = 13:00). So agoraMs = 13:00:01 > 13:00 → SINCRONIZACAO_TARDIA. And participants are inscrito confirmado, código errado. Test expects 422 SINCRONIZACAO_TARDIA. Current code: passes NAO_INSCRITO (they're inscribed), then offline → agoraMs > limite → SINCRONIZACAO_TARDIA. ✓\n\nCriterion 23: lidoEm fora da janela (e.g., 10:00:00? let's consider fuera). janela [09:45, 10:30]. If lidoEm = 09:30 → fora. código errado. Envio agora within 2h of fim. instanteEfetivo = 09:30 fora → FORA_DA_JANELA. ✓\n\nCriterion 21: participante não inscrito com código inválido → NAO_INSCRITO. ✓ (also should be same relógio valid.)\n\nCriterion 16 (R10): obtém código 200, cancela atividade, POST com esse código → não ATIVIDADE_CANCELADA; devolve 403 NAO_INSCRITO (since cancelling also cancels inscrições confirmadas — R16 do M1). Wait — does cancelling an atividade cancel inscrições in this codebase? The spec says the scenario expects 403 NAO_INSCRITO because cancellation also cancels the confirmed inscrições. Hmm, in current implementation, when atividade is cancelada, does an inscricao status change to 'cancelada'? That's M1 logic. But the test seeds its own data, so we can construct the scenario to satisfy this: after cancelling, change the inscricao status to 'cancelada' (or just set it). Actually, the acceptance criterion says the cancelamento also cancels inscrições confirmadas. But this is M1 behavior. In our test we could simulate: seed inscrito confirmada, get code, cancel atividade, then do POST. If the implementation doesn't auto-cancel inscrições, the POST would succeed 201 (since NAO_INSCRITO wouldn't hit). But the criterion says \"retorna o erro normal da rota (403 NAO_INSCRITO, pois o cancelamento também cancela as inscrições confirmadas — R16 do M1). O cenário prova apenas a ausência da validação adicional: o GET /codigo já recusa após o cancelamento (R2).\"\n\nSo the key assertion for criterion 16 is: the POST does NOT return ATIVIDADE_CANCELADA. It could return 403 NAO_INSCRITO or even 201. To robustly prove \"absence of additional validation\", the critical assertion is `result.erro !== 'ATIVIDADE_CANCELADA'` and status not 422 with ATIVIDADE_CANCELADA. But we should be careful about what the \"normal error\" is.\n\nThis is Slice 4 test. Let me follow how the spec describes. Given the scenario: seed inscricao confirmada for p-carla, get code at 10:15:30 (in window), then cancel the atividade (situacao → 'cancelada'), then at same relógio POST with that code. Since M1 R16 cancels inscrições, the implementation should ideally reflect that. But wait, this codebase's POST presence route doesn't check cancelada. If inscricao is still 'confirmada' (we didn't update), the POST would pass inscrito check and return 201. That would still satisfy \"not ATIVIDADE_CANCELADA\".\n\nHmm, but the criterion explicitly expects 403 NAO_INSCRITO. If our test asserts 403 NAO_INSCRITO and the implementation returns 201, the test fails. But per TDD/spec, the expected outcome of the route absent the cancellation check is \"the normal route validation\". The test scenario in the spec says the cancelling also cancels inscrições confirmadas — this is presumably handled elsewhere (M1) or by test setup. Since we're focused on Slice 4 (R13/R10) and the setup seeds inscricoes directly, we control the inscricao status. To reflect the criterion, after cancelling the activity, we might also update the inscricao to cancelled... but that's M1 behavior.\n\nActually, let me re-read criterion 16: \"Obter o código (GET 200) dentro da janela, cancelar a atividade e então, no mesmo relógio, POST /encontros/:id/presencas com esse código → não devolve ATIVIDADE_CANCELADA; retorna o erro normal da rota (403 NAO_INSCRITO, pois o cancelamento também cancela as inscrições confirmadas — R16 do M1). O cenário prova apenas a ausência da validação adicional: o GET /codigo já recusa após o cancelamento (R2).\"\n\nAnd R10: \"Diferente de R2 (obtenção do código), ATIVIDADE_CANCELADA não é uma validação adicional do POST de presença: a rota não checa a situação de cancelada da atividade e nunca devolve esse erro — aplicam-se apenas as demais validações da rota (R6–R9, R11–R14).\"\n\nSo the essence of the R10 test: the POST must never return ATIVIDADE_CANCELADA. The specific scenario: after cancelling, since inscrições get cancelled (in real system via M1), the expected \"normal error\" is 403 NAO_INSCRITO.\n\nBut here's the catch: the current implementation doesn't connect to M1's cancellation logic. In the current repo, cancelling the atividade doesn't change inscricao status (that's M1's R16, maybe M1 isn't implemented, or it might be separate). Let me check how M1 handles cancellation. Let me look at atividades.ts.\n\nActually, let me check whether the current codebase has cancellation logic that changes inscription statuses. Let me read atividades.ts.\n\nActually the smarter approach for the test: seed inscricao as confirmada, get code, cancel atividade via DB (UPDATE atividades SET situacao='cancelada'), AND update inscricao to 'cancelada' (simulating M1 R16). Then POST → expect 403 NAO_INSCRITO (and NOT ATIVIDADE_CANCELADA). This tests that the route doesn't check cancelada (would be ATIVIDADE_CANCELADA if it did) and produces the normal error path.\n\nBut hold on — if we manually set inscricao to 'cancelada', the POST returns NAO_INSCRITO regardless of whether the route checks cancelada. So the test proves R10 (no ATIVIDADE_CANCELADA) and also R7 (NAO_INSCRITO for non-confirmed). That matches the criterion.\n\nHowever, TDD requires the test first fail. If slice 4 behavior is already implemented, the test would pass immediately. That would violate the TDD discipline. But the reality: the current code might already implement slice 4 by accident (it was written to satisfy slices 2 and 3, but the ordering naturally satisfies R13). \n\nHmm, wait. Let me reconsider. Is the ordering truly already matching R13? Let me check `instanteEfetivo` and the SINCRONIZACAO_TARDIA condition once more. Actually there may be a subtle bug: \n\n```js\nif (offline) {\n  const limiteSincronizacao = fim + 2 * 60 * 60 * 1000;\n  if (agoraMs > limiteSincronizacao) {\n```\n\nFor criterion 22, this works. OK.\n\nBut wait — is there any scenario where current code fails R13? Let's think about criterion 23 again: lidoEm fora da janela + código errado. agoraMs within 2h. offline=true. instanteEfetivo = min(lidoMs, agoraMs). If lidoMs is OUTSIDE window but EARLIER than agoraMs (e.g., 09:30), instanteEfetivo = 09:30 → FORA_DA_JANELA. But the test would set agora such that... fine, FORA_DA_JANELA is returned before CODIGO_INVALIDO. ✓\n\nWhat about a scenario where lidoEm is later (future) than agora, e.g., lidoEm = 10:31:00 (> inicio+30 = 10:30, so out of window) and agora = 10:15:30. instanteEfetivo = min(10:31, 10:15:30) = 10:15:30 → in window! So FORA_DA_JANELA won't trigger; CODIGO_INVALIDO would. But per R11, \"janela e código verificados no instante do lidoEm, não no do envio. Se lidoEm for posterior ao envio, vale o instante do envio.\" OK that's R11 (slice 3), already handled.\n\nSo for slice 4's 3 precedence criteria (21,22,23), current code handles them.\n\nHmm, so it seems Slice 4 is already implemented in the current codebase. But the task says to implement slice 4 via TDD. Perhaps I'm wrong; maybe I need to look more carefully whether the ordering matches. Let me re-check the ordering in the current code against R13 more carefully:\n\nR13 order after gerais + R12: NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO\n\nCurrent code order in presencas.ts:\n1. Line 58-64: SOMENTE_PARTICIPANTE (perfil)\n2. Line 66-81: NAO_ENCONTRADO\n3. Line 84-90: DADOS_INVALIDOS (codigo)\n4. Line 92-102: DADOS_INVALIDOS (lidoEm)\n5. Line 105-115: R12 → 200\n6. Line 117-127: NAO_INSCRITO → 403\n7. Line 132-140: SINCRONIZACAO_TARDIA → 422\n8. Line 142-147: FORA_DA_JANELA → 422\n9. Line 149-154: CODIGO_INVALIDO → 422\n10. Line 156+: insert → 201\n\nSo yes, it's already in R13 order. And R10: no cancelada check in this route. ✓ \n\nSo slice 4 behavior is essentially already present in the code. What's missing is the tests. And the user explicitly asked: \"Siga TDD: para cada comportamento, escreva primeiro o teste, execute e mostre ele falhando, e somente depois implemente o código mínimo necessário para fazê-lo passar.\"\n\nTDD skill: \"Ele tem que falhar. Teste que passa antes do código existir não está testando nada — descubra por quê antes de seguir.\"\n\nHmm. But if the code already implements it... Actually wait. Let me reconsider. Maybe the code does NOT already fully implement slice 4. Let me look at the git history. The newest commit is \"M3-R11: implementa sincronizacao offline\" (slice 3). During slice 3, the developer may have reordered things to satisfy R11 but might not have fully achieved R13. Let me double check by tracing each of the 3 precedence scenarios against the current code carefully.\n\nActually, wait. There might be an important subtlety in criterion 22. Let's think: \"POST /encontros/:id/presencas com lidoEm dentro da janela, código errado e envio após 2 h do fim → 422 SINCRONIZACAO_TARDIA\". In the current code, when offline, before SINCRONIZACAO_TARDIA check, NAO_INSCRITO is checked (fine, participant is inscrito). Then offline check happens: agoraMs > fim + 2h → true → SINCRONIZACAO_TARDIA. ✓. Test would pass.\n\nCriterion 21: \"não inscrito com código inválido → 403 NAO_INSCRITO (antes de CODIGO_INVALIDO)\". Current: NAO_INSCRITO before CODIGO_INVALIDO. ✓ But wait — in the scenario, the code is invalid AND the relógio is within janela. The participant has no active confirmada inscricao for that atividade. So NAO_INSCRITO returns 403. ✓\n\nCriterion 23: \"código errado e lidoEm fora da janela → 422 FORA_DA_JANELA (antes de CODIGO_INVALIDO)\". offline=true, lidoEm fora da janela. agoraMs must be within 2h of fim (so not SINCRONIZACAO_TARDIA). instanteEfetivo = min(lidoMs, agoraMs). lidoMs < inicio - 15min? For it to be FORA_DA_JANELA, instanteEfetivo must be outside window. If lidoEm is before the window (e.g., 09:30, before 09:45) then instanteEfetivo = 09:30 → FORA_DA_JANELA. ✓\n\nSo all three pass with current code. And R10 passes. Therefore slice 4's behaviors are already implemented.\n\nNow, per TDD discipline: If I write the test and it passes immediately, that violates \"test must fail first\". But the skill also says the test must verify behavior via public interface and the value comes from spec. The user wants TDD workflow demonstrated. Since the code already implements slice 4 (probably the previous slices' implementation naturally included the precedence), I should be honest about this.\n\nBut wait — let me reconsider whether the code really does. Let me re-read line 132-140 once more:\n\n```js\nif (offline) {\n  const limiteSincronizacao = fim + 2 * 60 * 60 * 1000;\n  if (agoraMs > limiteSincronizacao) {\n    return reply.code(422).send({...SINCRONIZACAO_TARDIA...});\n  }\n}\n```\n\nYes. OK.\n\nHmm, but there is one subtle thing about criterion 22 vs the current ordering: R13 says precedence is NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO. And \"Nenhuma ordem diferente é definida.\" So all good.\n\nBut actually — could the current implementation be \"incorrect\" regarding R10 in the sense that it checks inscricao and since the atividade is cancelled after getting the code, inscricoes aren't auto-cancelled in this codebase? The R10 test scenario: since M1's cancellation also cancels inscrições (R16 do M1), but the M1 module here... let me check if M1 is implemented. Actually the spec for M3 says \"R16 do M1\" — that's a cross-reference to the M1 spec. In our test, we control seeding. To keep the scenario faithful, we may cancel the atividade and also update inscrição to 'cancelada' (as M1 would). Then the POST returns NAO_INSCRITO. This validates R10 (never ATIVIDADE_CANCELADA) while also verifying the normal-error fallback.\n\nAlright, let me now consider the TDD flow given the current state. The user wants:\n1. Write test → run → show it failing\n2. Implement minimal code → run → green\n\nIf the code already passes the behavior, the tests will pass at step 1. That's actually fine in a sense: the tests document slice 4, and since the behavior is already in code, they'll be green immediately. But the user explicitly said \"execute e mostre ele falhando\". \n\nHmm, but maybe I'm wrong and there IS a behavior not yet implemented. Let me think again about R13 ordering with respect to the \"existing presence (R12)\" check. R13 says order is: general checks → R12 (existing → 200) → then precedence. But consider criterion 21 combined with R12? No, criterion 21 is about non-inscribed participant with invalid code. There's no prior presence.\n\nBut wait — what about the ordering of NAO_INSCRITO vs R12? R12 should return 200 (existing presence) BEFORE NAO_INSCRITO. Current code: R12 check at line 105, NAO_INSCRITO at line 117. ✓\n\nHmm what about SINCRONIZACAO_TARDIA for the online case (no lidoEm)? R11/R13 apply only to offline (lidoEm present). Current code only checks SINCRONIZACAO_TARDIA when offline. ✓ correct.\n\nOK so I'm fairly convinced slice 4 behavior is already implemented. \n\nLet me reconsider: maybe the task-setter expects that the previous slices left the code WITHOUT correct ordering, but actually in this very repo the ordering is already correct. Let me check against git blame... Actually maybe slice 4 was partially implemented. Let me not overthink. \n\nWait, actually — maybe I should reconsider whether the code truly has R13 ordering. Look again at the flow: the SINCRONIZACAO_TARDIA check happens BEFORE `instanteEfetivo` janela check and CODIGO_INVALIDO. But it's INSIDE `if (offline)`. For criterion 22, offline=true, good.\n\nAlright, regardless: The correct TDD approach here, given the code already implements the behavior, is tricky. But the user's instruction is explicit: \"para cada comportamento, escreva primeiro o teste, execute e mostre ele falhando, e somente depois implemente o código mínimo necessário para fazê-lo passar.\"\n\nOptions:\nA) Write the slice-4 tests. Run; they pass (because code already has it). Report this honestly, and note that slice 4 behavior is already covered; maybe I \"discover why\" per the skill (the previous slices' implementation naturally included the precedence).\n\nB) Perhaps I should look for a genuine gap. Let me re-examine the precedence once more for a subtle bug: \n\nIn criterion 22, the participant is inscribed confirmada. lidoEm inside janela, código errado. envio after 2h of fim. The current code will return SINCRONIZACAO_TARDIA. Good.\n\nBut wait — is there any issue with `agoraMs` being the server clock vs the lidoEm for the FORA_DA_JANELA check in criterion 22? No.\n\nHmm, one more: for criterion 21 with a confirmed-inscribed but code invalid... no, criterion 21 is \"não inscrito com código inválido\". Fine.\n\nActually, let me reconsider - maybe there's a real gap. R13 says NAO_INSCRITO first. But what if the participant IS inscribed, lidoEm within janela, código errado, envio after 2h → SINCRONIZACAO_TARDIA. ✓ handled.\n\nWhat about: participant inscribed, lidoEm within janela, code correct, envio after 2h → SINCRONIZACAO_TARDIA. Also handled (R11 test in slice 3, already green).\n\nOK. So honestly the behavior is implemented. Given TDD rules (\"Teste que passa antes do código existir não está testando nada\"), but the code DOES exist... The tests are still valuable as regression tests. And per the user's requirement of showing failure first, I need to be careful. \n\nActually wait. Let me reconsider. Maybe the current code does NOT implement slice 4, and I misread. The last commit is slice 3 (R11). Perhaps in this repo the developer already wrote the entire POST handler with correct ordering in one go (common). In that case slice 4 is \"done but untested\". The natural TDD outcome: write tests, they're green. But the skill explicitly dislikes that.\n\nHmm, but there's a subtle point: maybe the tests will NOT all pass because of R10/R13 combined scenarios requiring something the current code does differently. Let me be very careful with test 16 (R10):\n\nScenario: GET codigo 200. Cancel atividade. Same relógio POST presenca with that código.\n- Current code: no cancelada check. inscricao still 'confirmada' (nothing changed it). NAO_INSCRITO passes. Also code still valid (same janela). → 201!\n\nPer criterion 16, expected \"retorna o erro normal da rota (403 NAO_INSCRITO...)\". So for the test to match spec, we need the inscrição to become 'cancelada' when the atividade is cancelled (M1 R16). Does this codebase implement that? Let me check atividades.ts to see if there's a cancel route that updates inscricoes. If M1 is NOT yet implemented (only placeholder routes), then there's no automatic cancellation.\n\nLet me read atividades.ts and encontros.spec.ts to understand.\n\nActually, the criterion says \"O cenário prova apenas a ausência da validação adicional\". The essence: POST must not return ATIVIDADE_CANCELADA. The \"error normal\" 403 NAO_INSCRITO depends on M1 behavior being present (that cancellation also cancels inscrições).\n\nTwo ways to write the test:\n- Option 1 (faithful to criterion): after cancelling the atividade, also update the inscrição to 'cancelada' in the test setup (simulating M1 R16), then assert POST returns 403 NAO_INSCRITO and NOT ATIVIDADE_CANCELADA. Best: assert status === 403 and erro === NAO_INSCRITO (this proves no ATIVIDADE_CANCELADA because that error would be 422).\n- Option 2: don't touch the inscricao; POST might return 201. Then assert erro !== ATIVIDADE_CANCELADA. But that's a \"frouxo\" test (loose) — checks only that it's not cancelada.\n\nOption 1 is better and matches the criterion exactly. The test seeds inscricao confirmada, gets code, cancels atividade, updates inscricao to 'cancelada' (simulating the M1 side-effect), then POSTs and asserts 403 NAO_INSCRITO. Since current code also returns NAO_INSCRITO for cancelled inscricao, it passes.\n\nBut also the criterion says: \"O GET /codigo já recusa após o cancelamento (R2)\" — a bonus assertion that after cancelling, GET /codigo returns 422 ATIVIDADE_CANCELADA. That's already tested in slice 1 (R2), so we could just do the GET assertion inline to confirm the scenario. I'll include it to strengthen the scenario.\n\nNow, regarding TDD flow: I genuinely believe current code passes all slice-4 tests. But let me verify by actually running. The right approach:\n\n1. Write test file `verificacoes/presencas-precedencia.spec.ts` with 4 tests (criteria 21, 22, 23, 16).\n2. Run → if they fail → good, show failing.\n3. Implement fix → run → green.\n\nIf they pass immediately, that means the code already conforms. Per the skill, I should \"descubra por quê\" — the ordering was already correct from slices 2/3. That's a legitimate outcome: slice 4 is about documenting/guarding existing correct behavior. But the user explicitly said to show failing tests. Hmm.\n\nWait, let me reconsider — maybe the tests WILL actually fail due to a subtle bug in the current ordering. Let me scrutinize the current code once more for the precedence in criterion 23:\n\nCriterion 23: POST with código errado e lidoEm fora da janela → 422 FORA_DA_JANELA.\nSetup: I'll use lidoEm = 2026-10-19T09:30:00-03:00 (16 min before inicio=10:00, outside). agora = within 2h of fim (e.g., 10:15:30). código errado.\nCurrent code:\n- offline = true, lidoMs = 09:30, instanteEfetivo = min(09:30, 10:15:30) = 09:30.\n- NAO_INSCRITO? participant inscribed confirmada → passes.\n- offline: limiteSincronizacao = 13:00. agoraMs=10:15:30 < 13:00 → ok.\n- FORA_DA_JANELA: instanteEfetivo(09:30) < inicio-15min(09:45) → 422 FORA_DA_JANELA ✓.\n\nPasses.\n\nCriterion 22: lidoEm dentro da janela (e.g., 10:15:30), código errado, agora = 13:00:01 (fim 11:00 + 2h = 13:00; 13:00:01 > 13:00). \n- offline=true, lidoMs valid, instanteEfetivo = min = 10:15:30.\n- NAO_INSCRITO passes.\n- offline: agoraMs=13:00:01 > 13:00 → SINCRONIZACAO_TARDIA ✓.\n\nPasses.\n\nCriterion 21: não inscrito + código inválido. \n- Seed: p-diego em_espera (or no inscricao). código inválido. agora 10:15:30.\n- NAO_INSCRITO → 403 ✓.\n\nPasses.\n\nCriterion 16: as analyzed → 403 NAO_INSCRITO after cancelling (with inscricao updated) ✓.\n\nSo all 4 pass already. Confirmed.\n\nGiven the TDD skill, the honest path: write the tests, run, and if they're green immediately, that means the implementation from earlier slices already respects R13/R10. The skill says a passing test before implementation \"isn't testing anything\". But here the implementation actually exists (from prior slices). \n\nHowever, the user's explicit instruction was to show failing first. I think the best approach now is:\n\n1. Write the tests.\n2. Run, showing they pass (because code already conforms). \n\nThen I face a dilemma. Actually, wait — maybe I should double-check: is there any chance the repo currently does NOT have this ordering, and I'm misreading presencas.ts? No, I read it. The ordering matches.\n\nAlternatively, maybe the intended situation is that the current `presencas.ts` was written during slice 2 and 3 and it already contains R13's order as a natural consequence. So slice 4 \"work\" = add the tests that lock in the precedence. Since the code already conforms, tests are green from the start.\n\nPer TDD skill: \"Teste que passa antes do código existir não está testando nada — descubra por quê antes de seguir.\" I would \"discover why\": the previous slices' implementation already respects R13 ordering and R10. That's a valid conclusion—no code change needed. I should report this honestly.\n\nBut the user told me to follow TDD strictly. Hmm. Actually let me reconsider whether I should just accept that these tests pass. The skill's concern is about green=lúteo (fake green). But if the code legitimately already implements the rule, the test is a valid regression test. The rule \"test first, then code\" is a workflow; when the behavior is already present (perhaps unintentionally), forcing an artificial red by deleting code would be silly.\n\nHold on. Let me reconsider whether the current behavior is TRULY slice-4 compliant, particularly R10 scenario without touching inscricao. Actually, criterion 16's text says expected 403 NAO_INSCRITO because cancellation cancels inscriptions. In this codebase there's no such logic yet, so a natural reading suggests slice 4's R10 might require... no, R10 just says \"não devolve ATIVIDADE_CANCELADA\". The 403 NAO_INSCRITO depends on M1. \n\nThe user said \"Não implemente nenhuma regra das fatias 5 ou 6.\" So I must not implement R15-R20. Fine.\n\nI think the cleanest plan:\n1. Create test file `verificacoes/presencas-precedencia.spec.ts` covering criteria 21, 22, 23 (R13) and 16 (R10).\n2. For the R10 test, to be faithful to the criterion and to ensure it reflects the real system where M1 cancels inscriptions, I'll cancel the atividade and set the inscrição to 'cancelada' in the seed (mimicking M1 R16), then assert GET /codigo returns ATIVIDADE_CANCELADA (already R2, confirms scenario) and POST returns 403 NAO_INSCRITO (not ATIVIDADE_CANCELADA). This makes the test robust: it specifically checks the POST never returns ATIVIDADE_CANCELADA, via the \"error normal\" being NAO_INSCRITO.\n\nActually, hmm. There's subtlety: if I update the inscricao to 'cancelada', then the POST with a valid code would return NAO_INSCRITO in the current code. And the test asserts status 403, erro NAO_INSCRITO. Good. Also assert erro !== \"ATIVIDADE_CANCELADA\" (redundant but explicit).\n\nBut wait — could a slice-4 implementation that DID check cancelada return 422 ATIVIDADE_CANCELADA before looking at inscricao? In current code no. Our test asserts 403 → this proves no cancelada check. \n\n3. Run: they will be green (my analysis). Then I'll document honestly: slice 4 behaviors already conform; tests lock them in; no code change needed.\n\nBut the user explicitly wants to see failing tests. Let me reconsider: maybe there IS actually a bug. Let me very carefully re-read the code ordering once more in presencas.ts lines 92-154... \n\nLine 92: `const agoraMs = agoraServidor(app).getTime();`\nLine 94-96: lidoEm parse, offline detection.\nLine 103: instanteEfetivo.\nLine 105-115: R12 existing → 200.\nLine 117-127: inscrito.\nLine 129-130: inicio, fim.\nLine 132-140: offline → sincronizacao tardia.\nLine 142-147: fora da janela.\nLine 149-154: codigo invalido.\n\nConfirmed. All good.\n\nHmm wait, actually there is one more consideration for criterion 21. \"POST de participante não inscrito com código inválido → 403 NAO_INSCRITO (antes de CODIGO_INVALIDO)\". What if the participant is not inscribed AND has no presence? fine → NAO_INSCRITO.\n\nBut also: the ordering \"NAO_INSCRITO → SINCRONIZACAO_TARDIA\" — in current code, SINCRONIZACAO_TARDIA check for offline happens only after inscrito passes. So if not inscribed and envio after 2h → NAO_INSCRITO (not SINCRONIZACAO_TARDIA). That matches R13 precedence NAO_INSCRITO first. Good.\n\nSo all good. Let me proceed with the TDD flow.\n\nActually, wait. I want to reconsider my approach to be faithful to the user's explicit requirement \"execute e mostre ele falhando\". Given my analysis says the tests already pass, I have two honest choices:\n\n(a) Write tests, run, show they pass, explain that slice 4 behavior (R13/R10) is already satisfied by the code from earlier slices, so no implementation change is needed. This respects both TDD skill and truth.\n\n(b) Try to force a red by writing the test that checks something the current code fails. Is there anything? E.g., a test that asserts precedence where current code might actually violate... I couldn't find one.\n\nActually, here's a thought: perhaps I should verify empirically rather than trust my reading. Let me write the tests and run them. If they all pass, I'll present the honest result. If any fails, that's genuine TDD red → fix.\n\nThat's the right move. Let me create the test file.\n\nLet me follow the exact convention of the existing test files. I'll create `api/verificacoes/presencas-precedencia.spec.ts`.\n\nNow the tests:\n\nCriterion 21 (R13): POST não inscrito com código inválido → 403 NAO_INSCRITO antes de CODIGO_INVALIDO.\n- reset relogio = 2026-10-19T10:15:30-03:00, inscricao p-diego em_espera (não confirmada).\n- Build invalid code. I could obtain a valid code and mutate it, or use \"AAAAAA\". Simpler: use a fixed invalid 6-char code \"ZZZZZZ\". The assertion just needs NAO_INSCRITO. Since the code is invalid AND not inscribed, the expected is NAO_INSCRITO.\n- Assert status 403, erro NAO_INSCRITO.\n\nCriterion 22 (R13): lidoEm dentro da janela, código errado, envio após 2h do fim → 422 SINCRONIZACAO_TARDIA (antes de FORA_DA_JANELA e CODIGO_INVALIDO).\n- inscrito confirmada p-carla. relogio inicio? We need agoraMs > fim + 2h. fim = 11:00 → limite 13:00. agora = 13:00:01.\n- But to GET a valid code for the janela, we can't GET at 13:00:01 (out of janela). So we set relogio to 10:15:30, get code (for janela atual, used as lidoEm instant), then set relogio to 13:00:01 and POST with lidoEm=10:15:30 and codigo errado.\n- Wait — for SINCRONIZACAO_TARDIA to trigger, agora must be > 13:00:00. Use 13:00:01.\n- lidoEm = 10:15:30 dentro da janela [09:45, 10:30]. código errado (e.g., \"ZZZZZZ\"). \n- Expected: 422 SINCRONIZACAO_TARDIA. Because NAO_INSCRITO passes, then sincronizacao tardia triggers (agoraMs 13:00:01 > fim+2h). \n- But careful: offline=true, instanteEfetivo=min(lidoMs, agoraMs)=lidoMs=10:15:30. Sincronizacao check BEFORE janela check → SINCRONIZACAO_TARDIA. ✓\n\nCriterion 23 (R13): código errado e lidoEm fora da janela → 422 FORA_DA_JANELA (antes de CODIGO_INVALIDO).\n- inscrito confirmada p-carla. agora dentro (e.g., 10:15:30), lidoEm fora (e.g., 09:30:00, before inicio-15 = 09:45).\n- POST with lidoEm=09:30 and codigo errado → FORA_DA_JANELA.\n- Current code: offline=true, instanteEfetivo=09:30 (<09:45) → FORA_DA_JANELA. ✓\n\nCriterion 16 (R10): GET codigo 200, cancelar atividade, POST com o código → não ATIVIDADE_CANCELADA; retorna 403 NAO_INSCRITO (inscrição cancelada). GET /codigo após cancelamento → 422 ATIVIDADE_CANCELADA.\n- inscrito confirmada p-carla. relogio 10:15:30. GET codigo 200. \n- Update atividade situacao='cancelada'. Update inscricao status='cancelada' (simulating M1 R16). \n- GET /codigo → 422 ATIVIDADE_CANCELADA (confirms scenario per criterion).\n- POST presencas com código → 403 NAO_INSCRITO (NOT ATIVIDADE_CANCELADA). Assert erro === \"NAO_INSCRITO\" (which also implies not cancelada). Add explicit assert erro !== \"ATIVIDADE_CANCELADA\".\n\nWait, but should the POST use the inscrito confirmada->cancelada? If inscricao was cancelled, NAO_INSCRITO returns 403. Good.\n\nBut hmm: The criterion's essence is \"no cancellation validation in POST\". If the code DID have a cancela check, it would return 422 ATIVIDADE_CANCELADA before NAO_INSCRITO. Our test's expected 403 NAO_INSCRITO fails if the route checks cancelada. So the test distinguishes. \n\nNow, let me also think about \"não vire um teste frouxo\": assert status AND erro. Good.\n\nLet me write the file and run it.\n\nActually, one more consideration for TDD flow and being transparent with the user: since I strongly suspect things already pass, but the user demanded red-first, I'll write tests, run, and honestly report. If they're green immediately, that IS meaningful: it proves slice 4 behavior is present. Per the skill I should explain \"por quê\". I'll explain the ordering was already in place.\n\nLet me write the spec file now.\n\nPort: use 3013 to avoid collision.\n\nLet me write the file.\n\nFor criterion 21, I need a participant WITHOUT confirmada inscricao. I'll seed with em_espera (like existing R7 test). Actually, criterion 21 says \"participante não inscrito\" — I'll use em_espera which is not confirmada → NAO_INSCRITO. Fine.\n\nNow writing.\n\nActually, let me double-check the R16.do M1 claim about cancelling inscrições. We're not implementing M1; we're simulating in the test. That's fine since we're testing M3 slice 4.\n\nLet me also verify: does the test need to assert that GET /codigo returns ATIVIDADE_CANCELADA after cancel? The criterion says \"O cenário prova apenas a ausência da validação adicional: o GET /codigo já recusa após o cancelamento (R2).\" Including this GET assertion provides context that the atividade was indeed cancelled (proving the POST would face a cancelled activity). I'll include it.\n\nLet me write the test file.",
+     "time": {
+      "start": 1790098573239,
+      "end": 1790098710636
+     },
+     "id": "prt_0ca3087b7001Af0wJWPEw6KC8u",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca307341001Ep4HSzV7sMtgjr"
+    },
+    {
+     "type": "text",
+     "text": "Current state: 23 tests green, slice 4 (R13/R10) not yet covered by tests. Let me analyze the current implementation for slice 4 behaviors (R13 precedence and R10) and write the tests first.",
+     "time": {
+      "start": 1790098710650,
+      "end": 1790098727785
+     },
+     "id": "prt_0ca32a07a001ln56beK0StcLXI",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca307341001Ep4HSzV7sMtgjr"
+    },
+    {
+     "type": "tool",
+     "tool": "write",
+     "callID": "call_5cf7d2e35d3b4f6a93aad442",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-precedencia.spec.ts",
+       "content": "import { describe, it, before, after } from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport { createServer } from \"../src/server.js\";\n\nlet server: Awaited<ReturnType<typeof createServer>>;\nconst PORT = 3013;\nconst BASE_URL = `http://localhost:${PORT}`;\n\nasync function fetchJson(path: string, options: RequestInit = {}) {\n  const res = await fetch(`${BASE_URL}${path}`, {\n    ...options,\n    headers: {\n      \"Content-Type\": \"application/json\",\n      ...options.headers,\n    },\n  });\n  const text = await res.text();\n  let body: unknown = null;\n  if (text) {\n    try {\n      body = JSON.parse(text);\n    } catch {\n      body = text;\n    }\n  }\n  return { status: res.status, body, headers: res.headers };\n}\n\nfunction semearEncontro(opts: {\n  inscricoes?: Array<{ participanteId: string; status: string }>;\n} = {}) {\n  const db = server.db;\n  db.run(\n    \"INSERT INTO atividades (id, titulo, tipo, sala_id, vagas, situacao) VALUES (?, 'Palestra de teste', 'palestra', 'sala-101', 40, 'prevista')\",\n    [\"atv_a1b2c3d4\"]\n  );\n  db.run(\n    \"INSERT INTO encontros (id, atividade_id, inicio, fim, ordem) VALUES ('enc_5e6f7a8b', 'atv_a1b2c3d4', ?, ?, 1)\",\n    [\"2026-10-19T10:00:00-03:00\", \"2026-10-19T11:00:00-03:00\"]\n  );\n  for (const i of opts.inscricoes ?? []) {\n    db.run(\n      \"INSERT INTO inscricoes (id, atividade_id, participante_id, status) VALUES (?, 'atv_a1b2c3d4', ?, ?)\",\n      [`ins_${i.participanteId}_${i.status}`, i.participanteId, i.status]\n    );\n  }\n}\n\nasync function resetar(agora: string, opts: Parameters<typeof semearEncontro>[0] = {}) {\n  await fetchJson(\"/_teste/reset\", { method: \"POST\" });\n  await fetchJson(\"/_teste/relogio\", {\n    method: \"PUT\",\n    body: JSON.stringify({ agora }),\n  });\n  semearEncontro(opts);\n}\n\nasync function obterCodigo() {\n  const r = await fetchJson(\"/encontros/enc_5e6f7a8b/codigo\", {\n    headers: { \"X-Usuario\": \"org-ana\" },\n  });\n  assert.equal(r.status, 200);\n  return (r.body as { codigo: string }).codigo;\n}\n\ndescribe(\"M3 Fatia 4 - Precedência do POST online (R13, R10)\", () => {\n  before(async () => {\n    process.env.MODO_TESTE = \"1\";\n    server = await createServer();\n    await new Promise<void>((resolve) => server.listen({ port: PORT }, resolve));\n  });\n\n  after(async () => {\n    await server.close();\n  });\n\n  it(\"R13 - POST de participante não inscrito com código inválido retorna 403 NAO_INSCRITO antes de CODIGO_INVALIDO\", async () => {\n    await resetar(\"2026-10-19T10:15:30-03:00\", {\n      inscricoes: [{ participanteId: \"p-diego\", status: \"em_espera\" }],\n    });\n\n    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n      method: \"POST\",\n      headers: { \"X-Usuario\": \"p-diego\" },\n      body: JSON.stringify({ codigo: \"ZZZZZZ\" }),\n    });\n    assert.equal(r.status, 403);\n    assert.equal((r.body as { erro: string }).erro, \"NAO_INSCRITO\");\n  });\n\n  it(\"R13 - POST com lidoEm dentro da janela, código errado e envio após 2h do fim retorna 422 SINCRONIZACAO_TARDIA antes de FORA_DA_JANELA e CODIGO_INVALIDO\", async () => {\n    await resetar(\"2026-10-19T10:15:30-03:00\", {\n      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n    });\n\n    await fetchJson(\"/_teste/relogio\", {\n      method: \"PUT\",\n      body: JSON.stringify({ agora: \"2026-10-19T13:00:01-03:00\" }),\n    });\n\n    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n      method: \"POST\",\n      headers: { \"X-Usuario\": \"p-carla\" },\n      body: JSON.stringify({ codigo: \"ZZZZZZ\", lidoEm: \"2026-10-19T10:15:30-03:00\" }),\n    });\n    assert.equal(r.status, 422);\n    assert.equal((r.body as { erro: string }).erro, \"SINCRONIZACAO_TARDIA\");\n  });\n\n  it(\"R13 - POST com código errado e lidoEm fora da janela retorna 422 FORA_DA_JANELA antes de CODIGO_INVALIDO\", async () => {\n    await resetar(\"2026-10-19T10:15:30-03:00\", {\n      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n    });\n\n    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n      method: \"POST\",\n      headers: { \"X-Usuario\": \"p-carla\" },\n      body: JSON.stringify({ codigo: \"ZZZZZZ\", lidoEm: \"2026-10-19T09:30:00-03:00\" }),\n    });\n    assert.equal(r.status, 422);\n    assert.equal((r.body as { erro: string }).erro, \"FORA_DA_JANELA\");\n  });\n\n  it(\"R10 - POST de presença nunca devolve ATIVIDADE_CANCELADA, mesmo com a atividade cancelada (GET /codigo já recusa)\", async () => {\n    await resetar(\"2026-10-19T10:15:30-03:00\", {\n      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n    });\n\n    const codigo = await obterCodigo();\n\n    const db = server.db;\n    db.run(\n      \"UPDATE atividades SET situacao = 'cancelada' WHERE id = 'atv_a1b2c3d4'\"\n    );\n    db.run(\n      \"UPDATE inscricoes SET status = 'cancelada' WHERE participante_id = 'p-carla' AND atividade_id = 'atv_a1b2c3d4'\"\n    );\n\n    const rGet = await fetchJson(\"/encontros/enc_5e6f7a8b/codigo\", {\n      headers: { \"X-Usuario\": \"org-ana\" },\n    });\n    assert.equal(rGet.status, 422);\n    assert.equal((rGet.body as { erro: string }).erro, \"ATIVIDADE_CANCELADA\");\n\n    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n      method: \"POST\",\n      headers: { \"X-Usuario\": \"p-carla\" },\n      body: JSON.stringify({ codigo }),\n    });\n    assert.equal(r.status, 403);\n    assert.equal((r.body as { erro: string }).erro, \"NAO_INSCRITO\");\n    assert.notEqual((r.body as { erro: string }).erro, \"ATIVIDADE_CANCELADA\");\n  });\n});"
+      },
+      "output": "Wrote file successfully.",
+      "metadata": {
+       "diagnostics": {},
+       "filepath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-precedencia.spec.ts",
+       "exists": false,
+       "truncated": false
+      },
+      "title": "api\\verificacoes\\presencas-precedencia.spec.ts",
+      "time": {
+       "start": 1790098727714,
+       "end": 1790098727775
+      }
+     },
+     "id": "prt_0ca32a2c1001TtYmS8bwB2rdes",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca307341001Ep4HSzV7sMtgjr"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "30467221336fcce9ffcc246c0fdd988049c802cb",
+     "type": "step-finish",
+     "tokens": {
+      "total": 51109,
+      "input": 1415,
+      "output": 12062,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 37632
+      }
+     },
+     "cost": 0,
+     "id": "prt_0ca32e95b001eq63DK83NpvHiO",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca307341001Ep4HSzV7sMtgjr"
+    },
+    {
+     "type": "patch",
+     "hash": "b340de63b25106c8dcbcaf74244bfc2dd12b71ad",
+     "files": [
+      "C:/Users/ferna_fxhnpvd/semana-academica/api/verificacoes/presencas-precedencia.spec.ts"
+     ],
+     "id": "prt_0ca32eef1001GxmziTFxjl7JAE",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca307341001Ep4HSzV7sMtgjr"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 52628,
+     "input": 8627,
+     "output": 1505,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 42496
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1790098730759,
+     "completed": 1790098768258
+    },
+    "finish": "tool-calls",
+    "id": "msg_0ca32ef07001AhEA0TNXNvs2HY",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "snapshot": "30467221336fcce9ffcc246c0fdd988049c802cb",
+     "type": "step-start",
+     "id": "prt_0ca32f65a001IBme1lCFJIr1W6",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca32ef07001AhEA0TNXNvs2HY"
+    },
+    {
+     "type": "reasoning",
+     "text": "Wait, I need to understand the current code state. Looking at the current implementation of the POST presenca route, the order is:\n\n1. Check user is participant (SOMENTE_PARTICIPANTE)\n2. Check encontro exists (NAO_ENCONTRADO)\n3. Validate corpo.codigo (DADOS_INVALIDOS)\n4. Parse lidoEm (DADOS_INVALIDOS)\n5. Check existing presence (R12 → 200)\n6. Check inscrito (NAO_INSCRITO)\n7. Check sincronizacao tardia (offline)\n8. Check fora da janela\n9. Check codigo_invalido\n\nHmm, wait. This ordering already matches R13! The order is NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO.\n\nWait, but that's what slice 4 requires. Let me re-read presencas.ts carefully...\n\nLines 117-127: NAO_INSCRITO check (403)\nLines 129-130: inicio, fim\nLines 132-140: if offline -> SINCRONIZACAO_TARDIA check\nLines 142-147: FORA_DA_JANELA check\nLines 149-154: CODIGO_INVALIDO check\n\nSo the code ordering is already: NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO. This is exactly R13.\n\nAnd R10: the route never returns ATIVIDADE_CANCELADA. The POST presenca route doesn't check atividade situacao at all. So R10 already satisfied.\n\nHmm, this is concerning. It appears slice 4 behavior may already be implemented in the code (perhaps accidentally, since the previous slices also had this ordering). But my TDD skill says a test that passes before the code exists isn't testing anything.\n\nWait — let me re-read. The skill says \"Ele tem que falhar. Teste que passa antes do código existir não está testando nada — descubra por quê antes de seguir.\"\n\nBut the user explicitly asked me to implement slice 4 with TDD. If the code already implements it, then the tests will pass immediately. That's a problem for the TDD flow. But actually — maybe the ordering in the current code is NOT correct per R13. Let me look again very carefully.\n\nActually, wait. Let me check the code ordering once more:\n\nLine 105-115: existing presence check (R12, returns 200)\nLine 117-127: inscrito check → 403 NAO_INSCRITO\nLine 132-140: sincronizacao tardia\nLine 142-147: fora da janela\nLine 149-154: codigo invalido\n\nActually that's exactly R13. Hmm.\n\nBut wait — is there a subtlety? R13 says \"após as verificações gerais e a verificação de presença já existente (R12)\". Current code checks existing presence BEFORE inscrito. That matches.\n\nSo slice 4 may already be fully implemented. However! There might be a subtle bug. Let me run my new test to find out. If it fails, that tells me where issues are. Let me run.\n\nActually, let me think about what could be subtly wrong. \n\nTest 1: R13 non-inscribed + invalid code → NAO_INSCRITO. Current: inscrito check at line 117 happens before codigo check at line 149. Should pass → 403 NAO_INSCRITO. \n\nTest 2: lidoEm within window, wrong code, send after 2h of fim → SINCRONIZACAO_TARDIA before FORA_DA_JANELA and CODIGO_INVALIDO. Current: sincronizacao check (line 132) before janela (line 142) and codigo (line 149). Should pass.\n\nTest 3: wrong code and lidoEm out of window → FORA_DA_JANELA before CODIGO_INVALIDO. Current: janela check (142) before codigo (149). Should pass.\n\nTest 4 (R10): cancel activity, POST presence → never ATIVIDADE_CANCELADA. Current: route has no check on atividade situacao. So POST returns NAO_INSCRITO (since inscricao cancelled). Should pass; not ATIVIDADE_CANCELADA.\n\nHmm, so all tests likely pass already given the current code. But wait — did the previous slices already implement this? Let me check git log: the latest commit is \"M3-R11: implementa sincronizacao offline\". The current presencas.ts code order already reflects R13.\n\nThis is a problem for TDD: tests will pass immediately. According to the skill, I should \"descubra por quê\" — understand why the test passes. The reason: the ordering was already correct from prior slices.\n\nBut the user asked to implement slice 4. Perhaps the intended state is that the code does NOT yet have this ordering and I need to change it. But looking at the code, the ordering appears already correct.\n\nHold on, let me re-check more carefully. Actually, let me reconsider test 2. The condition in current code:\n\n```\nif (offline) {\n  const limiteSincronizacao = fim + 2 * 60 * 60 * 1000;\n  if (agoraMs > limiteSincronizacao) {\n    return 422 SINCRONIZACAO_TARDIA\n  }\n}\n```\n\nTest 2: relogio at 13:00:01 (fim=11:00, +2h = 13:00). agoraMs = 13:00:01 > 13:00:00 → SINCRONIZACAO_TARDIA. Yes passes.\n\nTest 3: lidoEm = 09:30 which is before inicio-15 (09:45). janela check: instanteEfetivo = min(lidoMs, agoraMs) = 09:30. 09:30 < 09:45 → FORA_DA_JANELA. Yes.\n\nSo all 4 tests pass with current code already. Let me run them to confirm.\n\nActually, wait. Maybe I should reconsider whether the current implementation is genuinely correct or if the tests would reveal something. Let me just run.",
+     "time": {
+      "start": 1790098732640,
+      "end": 1790098756501
+     },
+     "id": "prt_0ca32f660001dm9X57xRaA0iWM",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca32ef07001AhEA0TNXNvs2HY"
+    },
+    {
+     "type": "text",
+     "text": "Now let me run the new tests to see their state:",
+     "time": {
+      "start": 1790098756513,
+      "end": 1790098757175
+     },
+     "id": "prt_0ca3353a1001tgLj2YmTYsfXdX",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca32ef07001AhEA0TNXNvs2HY"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_52d8a58b6277497cbc415a4b",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "npx tsx --test verificacoes/presencas-precedencia.spec.ts 2>&1 | Select-Object -Last 50",
+       "timeout": 120000,
+       "workdir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api"
+      },
+      "output": "▶ M3 Fatia 4 - Precedência do POST online (R13, R10)\r\n  ✔ R13 - POST de participante não inscrito com código inválido retorna 403 NAO_INSCRITO antes de CODIGO_INVALIDO (181.615ms)\r\n  ✔ R13 - POST com lidoEm dentro da janela, código errado e envio após 2h do fim retorna 422 SINCRONIZACAO_TARDIA antes de FORA_DA_JANELA e CODIGO_INVALIDO (46.607ms)\r\n  ✔ R13 - POST com código errado e lidoEm fora da janela retorna 422 FORA_DA_JANELA antes de CODIGO_INVALIDO (38.7601ms)\r\n  ✔ R10 - POST de presença nunca devolve ATIVIDADE_CANCELADA, mesmo com a atividade cancelada (GET /codigo já recusa) (51.8575ms)\r\n✔ M3 Fatia 4 - Precedência do POST online (R13, R10) (545.6282ms)\r\nℹ tests 4\r\nℹ suites 1\r\nℹ pass 4\r\nℹ fail 0\r\nℹ cancelled 0\r\nℹ skipped 0\r\nℹ todo 0\r\nℹ duration_ms 2482.7027\r\n",
+      "metadata": {
+       "output": "▶ M3 Fatia 4 - Precedência do POST online (R13, R10)\r\n  ✔ R13 - POST de participante não inscrito com código inválido retorna 403 NAO_INSCRITO antes de CODIGO_INVALIDO (181.615ms)\r\n  ✔ R13 - POST com lidoEm dentro da janela, código errado e envio após 2h do fim retorna 422 SINCRONIZACAO_TARDIA antes de FORA_DA_JANELA e CODIGO_INVALIDO (46.607ms)\r\n  ✔ R13 - POST com código errado e lidoEm fora da janela retorna 422 FORA_DA_JANELA antes de CODIGO_INVALIDO (38.7601ms)\r\n  ✔ R10 - POST de presença nunca devolve ATIVIDADE_CANCELADA, mesmo com a atividade cancelada (GET /codigo já recusa) (51.8575ms)\r\n✔ M3 Fatia 4 - Precedência do POST online (R13, R10) (545.6282ms)\r\nℹ tests 4\r\nℹ suites 1\r\nℹ pass 4\r\nℹ fail 0\r\nℹ cancelled 0\r\nℹ skipped 0\r\nℹ todo 0\r\nℹ duration_ms 2482.7027\r\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "npx tsx --test verificacoes/presencas-precedencia.spec.ts 2>&1 | Select-Object -Last 50",
+      "time": {
+       "start": 1790098757150,
+       "end": 1790098766729
+      }
+     },
+     "id": "prt_0ca33541c001zbmUQbGuxFB0Do",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca32ef07001AhEA0TNXNvs2HY"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "30467221336fcce9ffcc246c0fdd988049c802cb",
+     "type": "step-finish",
+     "tokens": {
+      "total": 52628,
+      "input": 8627,
+      "output": 1505,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 42496
+      }
+     },
+     "cost": 0,
+     "id": "prt_0ca337eaa001UUDOsNDPhcO2TG",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca32ef07001AhEA0TNXNvs2HY"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 54841,
+     "input": 470,
+     "output": 1891,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 52480
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1790098768273,
+     "completed": 1790098791757
+    },
+    "finish": "tool-calls",
+    "id": "msg_0ca33819100182CVt3R2qUnjLI",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "snapshot": "30467221336fcce9ffcc246c0fdd988049c802cb",
+     "type": "step-start",
+     "id": "prt_0ca3389930018mqspQOmc9eAGp",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca33819100182CVt3R2qUnjLI"
+    },
+    {
+     "type": "reasoning",
+     "text": "The tests all pass immediately. The current code already implements the R13 precedence order and R10. So slice 4 behavior is essentially already implemented in presencas.ts. \n\nBut the TDD skill says: \"Teste que passa antes do código existir não está testando nada — descubra por quê antes de seguir.\"\n\nWait. Let me review the current code carefully. In presencas.ts, the order of checks is:\n1. Line 58-64: papel !== participante → SOMENTE_PARTICIPANTE\n2. Line 66-81: encontro not found → NAO_ENCONTRADO\n3. Line 84-90: codigo must be 6 chars → DADOS_INVALIDOS\n4. Line 92-103: lidoEm parse\n5. Line 105-115: existing presence → 200 (R12)\n6. Line 117-127: inscrito check → NAO_INSCRITO\n7. Line 129-130: inicio, fim\n8. Line 132-140: if offline, sincronizacao tardia\n9. Line 142-147: FORA_DA_JANELA\n10. Line 149-154: CODIGO_INVALIDO\n\nSo yes, the order is already: NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO. R13 is satisfied. And R10: no ATIVIDADE_CANCELADA check exists in the route, which satisfies R10.\n\nSo the current code already implements slice 4. The tests pass immediately. But per the TDD skill, a test that passes before the code exists isn't testing anything. However, the code already exists here (implemented during Fatia 2/3 development, apparently, or just the ordering was naturally correct).\n\nWait — maybe I should check whether the code truly matches. Actually, let me reconsider. The commit history shows:\n- M3-R11: implementa sincronizacao offline (Fatia 3)\n\nSo Fatia 4 R13/R10 behavior has likely been implemented along the way. But hold on — the user asked to implement only Fatia 4 following TDD. The tests I wrote pass immediately. This is a conflict with the TDD rule: \"Teste que passa antes do código existir não está testando nada\".\n\nBut the reality is that the code already passes. Per the skill's rule: \"descubra por quê antes de seguir.\" The reason is R13's precedence was naturally satisfied by the code ordering from prior slices. \n\nBut wait — is there actually anything missing? Let me re-read R13 and check criteria 21, 22, 23 more carefully.\n\nCriterion 21: POST de participante não inscrito com código inválido → 403 NAO_INSCRITO (antes de CODIGO_INVALIDO). ✓ satisfied.\n\nCriterion 22: POST com lidoEm dentro da janela, código errado e envio após 2 h do fim → 422 SINCRONIZACAO_TARDIA (antes de FORA_DA_JANELA e CODIGO_INVALIDO). ✓ satisfied.\n\nCriterion 23: POST com código errado e lidoEm fora da janela → 422 FORA_DA_JANELA (antes de CODIGO_INVALIDO). ✓ satisfied.\n\nCriterion 16 (R10): POST de presença não devolve ATIVIDADE_CANCELADA. ✓ satisfied.\n\nSo the slice 4 behaviors are already implemented in the code. The tests pass. Since the code already implements the behaviors, the correct TDD outcome is that these tests serve as regression proof. The skill says \"Teste que passa antes do código existir não está testando nada — descubra por quê antes de seguir.\" I did discover why: the code ordering was already written to match R13 during slices 2-3 (the checks were naturally placed in this order). So no implementation change is needed.\n\nBut wait — the user explicitly asked me to \"implemente o código mínimo necessário para fazê-lo passar\" showing tests failing first. Since all 4 tests passed immediately, I should be honest about this. The behavior is already implemented.\n\nHowever, let me double-check: is there any edge in R13 that the current code does NOT satisfy? Let me think about ordering relative to R12 and existing-presence check.\n\nR13 says: \"Precedência no POST online, após as verificações gerais e a verificação de presença já existente (R12): NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO.\"\n\nCurrent code checks R12 (existing → 200) at line 105-115, then NAO_INSCRITO at 117, then SINCRONIZACAO_TARDIA at 132, FORA_DA_JANELA at 142, CODIGO_INVALIDO at 149. ✓\n\nAlso R13 criteria refers to situations where the same request simultaneously violates multiple rules, confirming precedence.\n\nSo all slice-4 rules are already implemented. The 4 tests I wrote pass. Per the user's instruction \"Ao terminar, execute todos os testes e informe quantos passaram e quantos falharam\", I should run the full suite.\n\nLet me make sure my test file properly reflects R10 test — the criterion says the POST must NOT return ATIVIDADE_CANCELADA and returns normal route error (403 NAO_INSCRITO since cancellation also cancels the confirmed inscrições). In my test, I updated the inscricao to 'cancelada' and asserted that POST returns 403 NAO_INSCRITO. Good. But I also asserted error is not ATIVIDADE_CANCELADA (redundant but fine).\n\nHmm, but wait. In my R10 test, I manually set the inscricao status to 'cancelada' to simulate the M1 cancellation behavior. That's a test setup detail. But the assertion is that the route doesn't return ATIVIDADE_CANCELADA. That's fine.\n\nActually, let me reconsider: is my R10 test faithful? The criterion says: \"Obter o código (GET 200) dentro da janela, cancelar a atividade e então, no mesmo relógio, POST /encontros/:id/presencas com esse código → não devolve ATIVIDADE_CANCELADA; retorna o erro normal da rota (403 NAO_INSCRITO, pois o cancelamento também cancela as inscrições confirmadas — R16 do M1).\"\n\nSo the scenario relies on M1's cancellation logic that also cancels inscrições. In my test, I manually update the inscricao to cancelada to replicate that (since M1's cancellation route may not be implemented here). That's faithful to the intent. Good.\n\nNow — the concern: the TDD skill says a test passing before code exists is not testing anything. But here the code already exists (it was written as part of prior slices, with the right ordering). The honest result: the 4 tests pass, confirming slice 4 needs no new implementation. I should report this clearly.\n\nBut hold on. Let me double check that the current code wasn't accidentally implementing R13 due to previous ordering — meaning the tests genuinely prove it. Yes, they do prove it: if someone broke the ordering, the tests would fail.\n\nActually, let me reconsider whether I should have made the tests fail first. The TDD skill is explicit: \"Teste que passa antes do código existir não está testando nada — descubra por quê antes de seguir.\" I did discover why: the code ordering from Fatias 2/3 already satisfies R13 and R10. So per the skill, this is acceptable — the tests now document/protect this behavior. \n\nThe user expected me to \"Implemente somente a Fatia 4\". Since the behavior already exists, there is no code to write. I'll explain this.\n\nLet me run the full suite to report counts.",
+     "time": {
+      "start": 1790098770329,
+      "end": 1790098788872
+     },
+     "id": "prt_0ca338999001usprHQolIcyK57",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca33819100182CVt3R2qUnjLI"
+    },
+    {
+     "type": "text",
+     "text": "The 4 slice-4 tests pass immediately. Per the TDD skill, I must understand why the test passes before code changes — I'll verify the current implementation covers R13/R10, then run the full suite.\n\nLet me verify the current implementation ordering in `presencas.ts`, which appears to already satisfy R13:",
+     "time": {
+      "start": 1790098788882,
+      "end": 1790098790301
+     },
+     "id": "prt_0ca33d211001QAth74Zj07F5RJ",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca33819100182CVt3R2qUnjLI"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_192ef8c27fb24527a650f4ae",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts",
+       "offset": 104,
+       "limit": 75
+      },
+      "output": "[3064 caracteres omitidos]",
+      "title": "api\\src\\rotas\\presencas.ts",
+      "time": {
+       "start": 1790098790232,
+       "end": 1790098790386
+      }
+     },
+     "id": "prt_0ca33d610001FI7aGJ3ok7vrWC",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca33819100182CVt3R2qUnjLI"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "30467221336fcce9ffcc246c0fdd988049c802cb",
+     "type": "step-finish",
+     "tokens": {
+      "total": 54841,
+      "input": 470,
+      "output": 1891,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 52480
+      }
+     },
+     "cost": 0,
+     "id": "prt_0ca33daaf0016IWLhMhyq62499",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca33819100182CVt3R2qUnjLI"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 56899,
+     "input": 990,
+     "output": 1125,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 54784
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1790098791769,
+     "completed": 1790098822542
+    },
+    "finish": "tool-calls",
+    "id": "msg_0ca33dd59001H2Av5E50NGO5fr",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "snapshot": "30467221336fcce9ffcc246c0fdd988049c802cb",
+     "type": "step-start",
+     "id": "prt_0ca33e5570014KVvre0hmgTwPG",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca33dd59001H2Av5E50NGO5fr"
+    },
+    {
+     "type": "reasoning",
+     "text": "The current implementation already satisfies R13 and R10:\n\n- R13: `NAO_INSCRITO` (line 117-127) → `SINCRONIZACAO_TARDIA` (line 132-140) → `FORA_DA_JANELA` (line 142-147) → `CODIGO_INVALIDO` (line 149-154). ✓ Order is correct.\n- R10: the POST route never checks `ATIVIDADE_CANCELADA`. ✓\n\nSo the code already implements slice 4. The tests pass immediately because the behavior already existed (probably added during slice 2/3 implementations). That's fine — the tests document/prove the behavior.\n\nHowever, the TDD skill says: \"Teste que passa antes do código existir não está testando nada — descubra por quê antes de seguir.\" The reason is that the code was already written to satisfy these rules during previous slices.\n\nNow, the user explicitly asked me to do TDD: write test, show failing, then implement minimal code. Since the tests already pass, the implementation already covers the slice. But I should double-check whether R10's order truly aligns — R10 says the route doesn't check this. It doesn't. Also R10 test scenario: cancel activity, then GET /codigo returns ATIVIDADE_CANCELADA (works since R2). POST doesn't return ATIVIDADE_CANCELADA — returns NAO_INSCRITO. Since my test cancels the inscricao too (simulating M1's behavior of canceling inscrições when activity is cancelled), the POST returns 403 NAO_INSCRITO. Good.\n\nWait — but is there any missing behavior? Let me re-read the criteria for Fatia 4 precisely:\n\n- Criterion 21 (R13): participant not inscribed with invalid code → 403 NAO_INSCRITO (before CODIGO_INVALIDO). ✓\n- Criterion 22 (R13): lidoEm within window, wrong code, envio after 2h after fim → 422 SINCRONIZACAO_TARDIA (before FORA_DA_JANELA and CODIGO_INVALIDO). ✓\n- Criterion 23 (R13): wrong code and lidoEm out of window → 422 FORA_DA_JANELA (before CODIGO_INVALIDO). ✓\n- Criterion 16 (R10): no ATIVIDADE_CANCELADA in presence route. ✓\n\nAll 4 criteria are covered by my tests and pass.\n\nSo the implementation already satisfies Fatia 4. There's nothing to implement. The tests prove the behavior. That's a valid TDD outcome — the red phase just happened earlier when those rules were written during earlier slices. I should be honest with the user about this.\n\nActually wait - let me double check one nuance in criterion 16: \"O cenário prova apenas a ausência da validação adicional: o GET /codigo já recusa após o cancelamento (R2).\" My test does check that GET /codigo returns 422 ATIVIDADE_CANCELADA after canceling. Good.\n\nAlso, I should verify: in my R10 test, before canceling, I got the code via GET which returned 200 (I use obterCodigo() which asserts 200). Good.\n\nLet me verify whether the R13 criterion 22 ordering: is the sincronizacao check before FORA_DA_JANELA check in the code? Yes (line 132 before 142).\n\nNow, are there other things about slice 4 I might be missing? Slice 4 = R13 + R10. Covered by my 4 tests. \n\nNow, since the tests already pass, per the TDD skill the \"test passing before code\" concern — the code already exists. The important thing: don't change tests to make them pass; don't write bogus code. The implementation is correct. I'll report honestly.\n\nLet me run the full test suite to report the totals.",
+     "time": {
+      "start": 1790098793819,
+      "end": 1790098810475
+     },
+     "id": "prt_0ca33e55b001Kol0jtD8sokpLq",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca33dd59001H2Av5E50NGO5fr"
+    },
+    {
+     "type": "text",
+     "text": "The 4 slice-4 tests pass immediately. Per the TDD skill rule (\"teste que passa antes do código existir não está testando nada — descubra por quê\"), I investigated: **the code already implements R13/R10**. In `presencas.ts` the order is already `NAO_INSCRITO` (line 117) → `SINCRONIZACAO_TARDIA` (line 132) → `FORA_DA_JANELA` (line 142) → `CODIGO_INVALIDO` (line 149), and the route never checks `situacao = 'cancelada'` (R10). These rules were covered incidentally during slices 2/3 implementation.\n\nNow let me run the full suite to report totals:",
+     "time": {
+      "start": 1790098810481,
+      "end": 1790098812961
+     },
+     "id": "prt_0ca342671001ukeT9MthGO04m4",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca33dd59001H2Av5E50NGO5fr"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_939f1ac7218d47bd9dbd68a8",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "npm test 2>&1 | Select-Object -Last 20",
+       "timeout": 180000,
+       "workdir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api"
+      },
+      "output": "✔ M3 Fatia 4 - Precedência do POST online (R13, R10) (739.6635ms)\r\n▶ M3 Fatia 2 - Presença online básica\r\n  ✔ R8 - POST sem lidoEm de inscrito confirmado retorna 201 com origem='qr' e lidoEm=registradaEm=relógio (254.8212ms)\r\n  ✔ R7 - POST de participante com inscrição em_espera retorna 403 NAO_INSCRITO (71.1275ms)\r\n  ✔ R6 - POST com relógio fora de [inicio-15, inicio+30] retorna 422 FORA_DA_JANELA (69.838ms)\r\n  ✔ R6 - POST com relógio em inicio+30 min:00 (borda) retorna 201 (58.3722ms)\r\n  ✔ R9 - POST com código que nunca foi gerado retorna 422 CODIGO_INVALIDO (34.7309ms)\r\n  ✔ R14 - POST com o código da janela anterior (dentro da janela de presença) retorna 201 (40.3288ms)\r\n  ✔ R12 - segundo POST do mesmo participante/encontro retorna 200 mantendo lidoEm/registradaEm/origem (36.5779ms)\r\n  ✔ R9 - POST com código já expirado (fora das janelas atual e anterior) retorna 422 CODIGO_INVALIDO (65.4164ms)\r\n  ✔ R5 - validade do código é restrita ao par (encontro, janela): código de outro encontro é rejeitado (48.044ms)\r\n✔ M3 Fatia 2 - Presença online básica (966.5735ms)\r\nℹ tests 27\r\nℹ suites 5\r\nℹ pass 27\r\nℹ fail 0\r\nℹ cancelled 0\r\nℹ skipped 0\r\nℹ todo 0\r\nℹ duration_ms 3030.414\r\n",
+      "metadata": {
+       "output": "✔ M3 Fatia 4 - Precedência do POST online (R13, R10) (739.6635ms)\r\n▶ M3 Fatia 2 - Presença online básica\r\n  ✔ R8 - POST sem lidoEm de inscrito confirmado retorna 201 com origem='qr' e lidoEm=registradaEm=relógio (254.8212ms)\r\n  ✔ R7 - POST de participante com inscrição em_espera retorna 403 NAO_INSCRITO (71.1275ms)\r\n  ✔ R6 - POST com relógio fora de [inicio-15, inicio+30] retorna 422 FORA_DA_JANELA (69.838ms)\r\n  ✔ R6 - POST com relógio em inicio+30 min:00 (borda) retorna 201 (58.3722ms)\r\n  ✔ R9 - POST com código que nunca foi gerado retorna 422 CODIGO_INVALIDO (34.7309ms)\r\n  ✔ R14 - POST com o código da janela anterior (dentro da janela de presença) retorna 201 (40.3288ms)\r\n  ✔ R12 - segundo POST do mesmo participante/encontro retorna 200 mantendo lidoEm/registradaEm/origem (36.5779ms)\r\n  ✔ R9 - POST com código já expirado (fora das janelas atual e anterior) retorna 422 CODIGO_INVALIDO (65.4164ms)\r\n  ✔ R5 - validade do código é restrita ao par (encontro, janela): código de outro encontro é rejeitado (48.044ms)\r\n✔ M3 Fatia 2 - Presença online básica (966.5735ms)\r\nℹ tests 27\r\nℹ suites 5\r\nℹ pass 27\r\nℹ fail 0\r\nℹ cancelled 0\r\nℹ skipped 0\r\nℹ todo 0\r\nℹ duration_ms 3030.414\r\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "npm test 2>&1 | Select-Object -Last 20",
+      "time": {
+       "start": 1790098812786,
+       "end": 1790098820956
+      }
+     },
+     "id": "prt_0ca342d3d001VxyjoUDlAribaQ",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca33dd59001H2Av5E50NGO5fr"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "30467221336fcce9ffcc246c0fdd988049c802cb",
+     "type": "step-finish",
+     "tokens": {
+      "total": 56899,
+      "input": 990,
+      "output": 1125,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 54784
+      }
+     },
+     "cost": 0,
+     "id": "prt_0ca345267001RG8tQWTFNP1nUD",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca33dd59001H2Av5E50NGO5fr"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0ca2e57d70017E0kKMSWIN6PXH",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 57766,
+     "input": 545,
+     "output": 389,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 56832
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1790098822564,
+     "completed": 1790098829159
+    },
+    "finish": "stop",
+    "id": "msg_0ca3455a4001RVGcHmdqIOmjlx",
+    "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje"
+   },
+   "parts": [
+    {
+     "snapshot": "30467221336fcce9ffcc246c0fdd988049c802cb",
+     "type": "step-start",
+     "id": "prt_0ca345dc7001QCPtCP1jg6Wz97",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca3455a4001RVGcHmdqIOmjlx"
+    },
+    {
+     "type": "reasoning",
+     "text": "All 27 tests pass. Let me summarize.\n\nThe 4 slice-4 tests passed immediately because the code already implements R13/R10. The R13 ordering in presencas.ts was already correct (NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO), and there was never a check of `situacao` (cancelada) in the route (R10).\n\nSo there was no code to change for slice 4 - the tests prove the behavior. I should report this clearly.",
+     "time": {
+      "start": 1790098824693,
+      "end": 1790098825808
+     },
+     "id": "prt_0ca345df50011k5eju5Gt1z12P",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca3455a4001RVGcHmdqIOmjlx"
+    },
+    {
+     "type": "text",
+     "text": "Suíte completa: **27 passaram, 0 falharam**.\n\nNota importante sobre o ciclo TDD: os 4 testes da Fatia 4 **passaram imediatamente**. Inverti o \"suspeito é o código\" e investiguei — o comportamento já existia:\n\n- **R13**: a ordem em `api/src/rotas/presencas.ts` já era `NAO_INSCRITO` (linha 117) → `SINCRONIZACAO_TARDIA` (linha 132) → `FORA_DA_JANELA` (linha 142) → `CODIGO_INVALIDO` (linha 149), correta desde as fatias 2/3.\n- **R10**: a rota nunca checa `situacao = 'cancelada'` — não havia validação de `ATIVIDADE_CANCELADA` para remover.\n\nComo a spec já estava satisfeita, não houve código mínimo a escrever; os testes agora provam/registram os critérios 16, 21, 22 e 23 (R10/R13). Nenhuma regra das fatias 5 ou 6 foi implementada.",
+     "time": {
+      "start": 1790098825812,
+      "end": 1790098827699
+     },
+     "id": "prt_0ca346254001zUfO52ODpJRrq2",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca3455a4001RVGcHmdqIOmjlx"
+    },
+    {
+     "reason": "stop",
+     "snapshot": "30467221336fcce9ffcc246c0fdd988049c802cb",
+     "type": "step-finish",
+     "tokens": {
+      "total": 57766,
+      "input": 545,
+      "output": 389,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 56832
+      }
+     },
+     "cost": 0,
+     "id": "prt_0ca346c9d001x5DYvVxvlqu83n",
+     "sessionID": "ses_f35d1a880ffeoC6tDRn8eYqRje",
+     "messageID": "msg_0ca3455a4001RVGcHmdqIOmjlx"
+    }
+   ]
+  }
+ ]
+}

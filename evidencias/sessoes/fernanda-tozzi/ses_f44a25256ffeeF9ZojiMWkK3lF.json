@@ -1,0 +1,2359 @@
+{
+ "info": {
+  "id": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+  "slug": "mighty-star",
+  "projectID": "806cda80bec71febecee66cf854ff7696c11d5ff",
+  "directory": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+  "path": "api",
+  "title": "Fatia 3 de M3-presenca com TDD",
+  "agent": "build",
+  "model": {
+   "id": "big-pickle",
+   "providerID": "opencode"
+  },
+  "version": "1.18.31",
+  "summary": {
+   "additions": 0,
+   "deletions": 0,
+   "files": 0
+  },
+  "cost": 0,
+  "tokens": {
+   "input": 29990,
+   "output": 14210,
+   "reasoning": 0,
+   "cache": {
+    "read": 681984,
+    "write": 0
+   }
+  },
+  "time": {
+   "created": 1789849873833,
+   "updated": 1789850065495
+  }
+ },
+ "messages": [
+  {
+   "info": {
+    "role": "user",
+    "time": {
+     "created": 1789849873921
+    },
+    "agent": "build",
+    "model": {
+     "providerID": "opencode",
+     "modelID": "big-pickle"
+    },
+    "summary": {
+     "diffs": [
+      {
+       "file": "api/src/rotas/presencas.ts",
+       "patch": "Index: api/src/rotas/presencas.ts\n===================================================================\n--- api/src/rotas/presencas.ts\t\n+++ api/src/rotas/presencas.ts\t\n@@ -1,153 +1,185 @@\n import { FastifyInstance } from \"fastify\";\n import crypto from \"node:crypto\";\n import { verifyAuth } from \"../middleware/auth.js\";\n import { salvarBanco } from \"../db.js\";\n import {\n   agoraServidor,\n   codigoDaJanela,\n   MINUTOS_ANTES,\n   MINUTOS_DEPOIS,\n   MILIS_DA_JANELA,\n } from \"./encontros.js\";\n \n function linhaParaObjeto(cols: string[], vals: unknown[]): Record<string, unknown> {\n   const row: Record<string, unknown> = {};\n   cols.forEach((c, i) => { row[c] = vals[i]; });\n   return row;\n }\n \n function novoIdPresenca(): string {\n   return `pre_${crypto.randomBytes(4).toString(\"hex\")}`;\n }\n \n function janelaInicioDe(instante: number): number {\n   return Math.floor(instante / MILIS_DA_JANELA) * MILIS_DA_JANELA;\n }\n \n function codigoEhValido(encontroId: string, codigo: string, instante: number): boolean {\n   const janelaAtual = janelaInicioDe(instante);\n   return (\n     codigo === codigoDaJanela(encontroId, janelaAtual) ||\n     codigo === codigoDaJanela(encontroId, janelaAtual - MILIS_DA_JANELA)\n   );\n }\n \n function presencaParaObjeto(\n   cols: string[],\n   vals: unknown[],\n   encontroId: string,\n   participanteId: string\n ) {\n   const row = linhaParaObjeto(cols, vals);\n   return {\n     id: row.id,\n     encontroId,\n     participanteId,\n     origem: row.origem,\n     lidoEm: row.lido_em,\n     registradaEm: row.registrada_em,\n     justificativa: row.justificativa ?? null,\n   };\n }\n \n export function registrarRotasPresencas(app: FastifyInstance) {\n   app.post(\n     \"/encontros/:id/presencas\",\n     { preHandler: verifyAuth },\n     async (req, reply) => {\n       const usuario = req.usuario;\n       if (!usuario || usuario.papel !== \"participante\") {\n         return reply.code(403).send({\n           erro: \"SOMENTE_PARTICIPANTE\",\n           mensagem: \"Apenas participantes registram presença\",\n         });\n       }\n \n       const { id } = req.params as { id: string };\n       const db = app.db;\n \n       const result = db.exec(\n         `SELECT e.id, e.inicio, e.fim, e.atividade_id\n          FROM encontros e\n          JOIN atividades a ON a.id = e.atividade_id\n          WHERE e.id = ?`,\n         [id]\n       );\n       if (result.length === 0 || result[0].values.length === 0) {\n         return reply.code(404).send({\n           erro: \"NAO_ENCONTRADO\",\n           mensagem: \"Encontro não encontrado\",\n         });\n       }\n \n       const encontro = linhaParaObjeto(result[0].columns, result[0].values[0]);\n-      const corpo = (req.body ?? {}) as { codigo?: unknown };\n+      const corpo = (req.body ?? {}) as { codigo?: unknown; lidoEm?: unknown };\n       if (typeof corpo.codigo !== \"string\" || corpo.codigo.length !== 6) {\n         return reply.code(422).send({\n           erro: \"DADOS_INVALIDOS\",\n           mensagem: \"Campo 'codigo' é obrigatório e deve ter 6 caracteres\",\n         });\n       }\n+      if (corpo.lidoEm !== undefined && typeof corpo.lidoEm !== \"string\") {\n+        return reply.code(422).send({\n+          erro: \"DADOS_INVALIDOS\",\n+          mensagem: \"Campo 'lidoEm' deve ser uma data ISO 8601\",\n+        });\n+      }\n \n       const agoraMs = agoraServidor(app).getTime();\n \n       const existente = db.exec(\n         `SELECT id, origem, lido_em, registrada_em, justificativa\n          FROM presencas\n          WHERE encontro_id = ? AND participante_id = ?`,\n         [id, usuario.id]\n       );\n       if (existente.length > 0 && existente[0].values.length > 0) {\n         return reply.code(200).send(\n           presencaParaObjeto(existente[0].columns, existente[0].values[0], id, usuario.id)\n         );\n       }\n \n       const inscrito = db.exec(\n         `SELECT 1 FROM inscricoes\n          WHERE atividade_id = ? AND participante_id = ? AND status = 'confirmada'`,\n         [encontro.atividade_id as string, usuario.id]\n       );\n       if (inscrito.length === 0 || inscrito[0].values.length === 0) {\n         return reply.code(403).send({\n           erro: \"NAO_INSCRITO\",\n           mensagem: \"Participante não tem inscrição confirmada na atividade\",\n         });\n       }\n \n       const inicio = new Date(encontro.inicio as string).getTime();\n-      if (agoraMs < inicio - MINUTOS_ANTES || agoraMs > inicio + MINUTOS_DEPOIS) {\n+      const fim = new Date(encontro.fim as string).getTime();\n+\n+      const lidoEm = corpo.lidoEm as string | undefined;\n+      const offline = lidoEm !== undefined;\n+      const lidoMs = offline ? new Date(lidoEm).getTime() : agoraMs;\n+      if (offline && Number.isNaN(lidoMs)) {\n         return reply.code(422).send({\n+          erro: \"DADOS_INVALIDOS\",\n+          mensagem: \"Campo 'lidoEm' deve ser uma data ISO 8601\",\n+        });\n+      }\n+\n+      const instanteEfetivo = offline ? Math.min(lidoMs, agoraMs) : agoraMs;\n+\n+      if (offline) {\n+        const limiteSincronizacao = fim + 2 * 60 * 60 * 1000;\n+        if (agoraMs > limiteSincronizacao) {\n+          return reply.code(422).send({\n+            erro: \"SINCRONIZACAO_TARDIA\",\n+            mensagem: \"Envio offline após 2 horas do fim do encontro\",\n+          });\n+        }\n+      }\n+\n+      if (instanteEfetivo < inicio - MINUTOS_ANTES || instanteEfetivo > inicio + MINUTOS_DEPOIS) {\n+        return reply.code(422).send({\n           erro: \"FORA_DA_JANELA\",\n           mensagem: \"Fora da janela de registro de presença\",\n         });\n       }\n \n-      if (!codigoEhValido(id, corpo.codigo, agoraMs)) {\n+      if (!codigoEhValido(id, corpo.codigo, instanteEfetivo)) {\n         return reply.code(422).send({\n           erro: \"CODIGO_INVALIDO\",\n           mensagem: \"Código não é válido para este encontro neste momento\",\n         });\n       }\n \n       const idPresenca = novoIdPresenca();\n       const registradaEm = new Date(agoraMs).toISOString();\n+      const lidoEmArmazenado = offline ? lidoEm : registradaEm;\n+      const origem = offline ? \"qr_offline\" : \"qr\";\n       db.run(\n         `INSERT INTO presencas (id, encontro_id, participante_id, origem, lido_em, registrada_em)\n-         VALUES (?, ?, ?, 'qr', ?, ?)`,\n-        [idPresenca, id, usuario.id, registradaEm, registradaEm]\n+         VALUES (?, ?, ?, ?, ?, ?)`,\n+        [idPresenca, id, usuario.id, origem, lidoEmArmazenado, registradaEm]\n       );\n       salvarBanco(db);\n \n       return reply.code(201).send({\n         id: idPresenca,\n         encontroId: id,\n         participanteId: usuario.id,\n-        origem: \"qr\",\n-        lidoEm: registradaEm,\n+        origem,\n+        lidoEm: lidoEmArmazenado,\n         registradaEm,\n         justificativa: null,\n       });\n     }\n   );\n }\n\\ No newline at end of file\n",
+       "additions": 39,
+       "deletions": 7,
+       "status": "modified"
+      },
+      {
+       "file": "api/verificacoes/presencas-offline.spec.ts",
+       "patch": "Index: api/verificacoes/presencas-offline.spec.ts\n===================================================================\n--- api/verificacoes/presencas-offline.spec.ts\t\n+++ api/verificacoes/presencas-offline.spec.ts\t\n@@ -0,0 +1,173 @@\n+import { describe, it, before, after } from \"node:test\";\n+import assert from \"node:assert/strict\";\n+import { createServer } from \"../src/server.js\";\n+\n+let server: Awaited<ReturnType<typeof createServer>>;\n+const PORT = 3012;\n+const BASE_URL = `http://localhost:${PORT}`;\n+\n+async function fetchJson(path: string, options: RequestInit = {}) {\n+  const res = await fetch(`${BASE_URL}${path}`, {\n+    ...options,\n+    headers: {\n+      \"Content-Type\": \"application/json\",\n+      ...options.headers,\n+    },\n+  });\n+  const text = await res.text();\n+  let body: unknown = null;\n+  if (text) {\n+    try {\n+      body = JSON.parse(text);\n+    } catch {\n+      body = text;\n+    }\n+  }\n+  return { status: res.status, body, headers: res.headers };\n+}\n+\n+function semearEncontro(opts: {\n+  inscricoes?: Array<{ participanteId: string; status: string }>;\n+} = {}) {\n+  const db = server.db;\n+  db.run(\n+    \"INSERT INTO atividades (id, titulo, tipo, sala_id, vagas, situacao) VALUES (?, 'Palestra de teste', 'palestra', 'sala-101', 40, 'prevista')\",\n+    [\"atv_a1b2c3d4\"]\n+  );\n+  db.run(\n+    \"INSERT INTO encontros (id, atividade_id, inicio, fim, ordem) VALUES ('enc_5e6f7a8b', 'atv_a1b2c3d4', ?, ?, 1)\",\n+    [\"2026-10-19T10:00:00-03:00\", \"2026-10-19T11:00:00-03:00\"]\n+  );\n+  for (const i of opts.inscricoes ?? []) {\n+    db.run(\n+      \"INSERT INTO inscricoes (id, atividade_id, participante_id, status) VALUES (?, 'atv_a1b2c3d4', ?, ?)\",\n+      [`ins_${i.participanteId}_${i.status}`, i.participanteId, i.status]\n+    );\n+  }\n+}\n+\n+async function resetar(agora: string, opts: Parameters<typeof semearEncontro>[0] = {}) {\n+  await fetchJson(\"/_teste/reset\", { method: \"POST\" });\n+  await fetchJson(\"/_teste/relogio\", {\n+    method: \"PUT\",\n+    body: JSON.stringify({ agora }),\n+  });\n+  semearEncontro(opts);\n+}\n+\n+async function obterCodigo() {\n+  const r = await fetchJson(\"/encontros/enc_5e6f7a8b/codigo\", {\n+    headers: { \"X-Usuario\": \"org-ana\" },\n+  });\n+  assert.equal(r.status, 200);\n+  return (r.body as { codigo: string }).codigo;\n+}\n+\n+describe(\"M3 Fatia 3 - Presença offline (lidoEm)\", () => {\n+  before(async () => {\n+    process.env.MODO_TESTE = \"1\";\n+    server = await createServer();\n+    await new Promise<void>((resolve) => server.listen({ port: PORT }, resolve));\n+  });\n+\n+  after(async () => {\n+    await server.close();\n+  });\n+\n+  it(\"R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline'\", async () => {\n+    await resetar(\"2026-10-19T10:15:30-03:00\", {\n+      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n+    });\n+\n+    const codigo = await obterCodigo();\n+\n+    await fetchJson(\"/_teste/relogio\", {\n+      method: \"PUT\",\n+      body: JSON.stringify({ agora: \"2026-10-19T12:00:00-03:00\" }),\n+    });\n+\n+    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n+      method: \"POST\",\n+      headers: { \"X-Usuario\": \"p-carla\" },\n+      body: JSON.stringify({ codigo, lidoEm: \"2026-10-19T10:15:30-03:00\" }),\n+    });\n+    assert.equal(r.status, 201);\n+    const body = r.body as {\n+      id: string;\n+      encontroId: string;\n+      participanteId: string;\n+      origem: string;\n+      lidoEm: string;\n+      registradaEm: string;\n+      justificativa: string | null;\n+    };\n+    assert.match(body.id, /^pre_[0-9a-f]{8}$/);\n+    assert.equal(body.encontroId, \"enc_5e6f7a8b\");\n+    assert.equal(body.participanteId, \"p-carla\");\n+    assert.equal(body.origem, \"qr_offline\");\n+    assert.equal(\n+      new Date(body.lidoEm).toISOString(),\n+      new Date(\"2026-10-19T10:15:30-03:00\").toISOString()\n+    );\n+    assert.equal(\n+      new Date(body.registradaEm).toISOString(),\n+      new Date(\"2026-10-19T12:00:00-03:00\").toISOString()\n+    );\n+    assert.equal(body.justificativa, null);\n+  });\n+\n+  it(\"R11 - POST com lidoEm dentro da janela, mas envio após 2h do fim do encontro retorna 422 SINCRONIZACAO_TARDIA\", async () => {\n+    await resetar(\"2026-10-19T10:15:30-03:00\", {\n+      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n+    });\n+\n+    const codigo = await obterCodigo();\n+\n+    await fetchJson(\"/_teste/relogio\", {\n+      method: \"PUT\",\n+      body: JSON.stringify({ agora: \"2026-10-19T13:00:01-03:00\" }),\n+    });\n+\n+    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n+      method: \"POST\",\n+      headers: { \"X-Usuario\": \"p-carla\" },\n+      body: JSON.stringify({ codigo, lidoEm: \"2026-10-19T10:15:30-03:00\" }),\n+    });\n+    assert.equal(r.status, 422);\n+    assert.equal((r.body as { erro: string }).erro, \"SINCRONIZACAO_TARDIA\");\n+  });\n+\n+  it(\"R11 - POST com lidoEm posterior ao envio valida janela e código pelo instante do envio\", async () => {\n+    await resetar(\"2026-10-19T10:15:30-03:00\", {\n+      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n+    });\n+\n+    const codigo = await obterCodigo();\n+\n+    await fetchJson(\"/_teste/relogio\", {\n+      method: \"PUT\",\n+      body: JSON.stringify({ agora: \"2026-10-19T10:16:30-03:00\" }),\n+    });\n+\n+    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n+      method: \"POST\",\n+      headers: { \"X-Usuario\": \"p-carla\" },\n+      body: JSON.stringify({ codigo, lidoEm: \"2026-10-19T10:18:00-03:00\" }),\n+    });\n+    assert.equal(r.status, 201);\n+    const body = r.body as {\n+      origem: string;\n+      lidoEm: string;\n+      registradaEm: string;\n+    };\n+    assert.equal(body.origem, \"qr_offline\");\n+    assert.equal(\n+      new Date(body.lidoEm).toISOString(),\n+      new Date(\"2026-10-19T10:18:00-03:00\").toISOString()\n+    );\n+    assert.equal(\n+      new Date(body.registradaEm).toISOString(),\n+      new Date(\"2026-10-19T10:16:30-03:00\").toISOString()\n+    );\n+  });\n+});\n\\ No newline at end of file\n",
+       "additions": 173,
+       "deletions": 0,
+       "status": "added"
+      }
+     ]
+    },
+    "id": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "type": "text",
+     "text": "Use a skill tdd. Implemente somente a Fatia 3 de ../specs/M3-presenca.md.\n\nFaça um teste por vez: escreva o teste, execute e mostre ele falhando; somente depois implemente o código mínimo necessário para fazê-lo passar.\n\nUse seed/helper no setup dos testes quando precisar de dados dos módulos M1 ou M2 ainda não implementados. Não implemente rotas ou regras desses módulos.\n\nNão implemente nenhuma regra das fatias 4–6 e não altere testes existentes apenas para fazê-los passar.\n\nAo terminar, execute todos os testes e informe quantos passaram e quantos falharam. ",
+     "id": "prt_0bb5dae05001PARlbpO0YRAJSy",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dae00001MAIVjsRC2jQsmD"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 10105,
+     "input": 332,
+     "output": 45,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 9728
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849873984,
+     "completed": 1789849881903
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5dae40001yzxuIT9CiGeAtv",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-start",
+     "id": "prt_0bb5dc832001dpc48YKW87etdu",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dae40001yzxuIT9CiGeAtv"
+    },
+    {
+     "type": "tool",
+     "tool": "skill",
+     "callID": "call_8b1f36d6ef1042349708380a",
+     "state": {
+      "status": "completed",
+      "input": {
+       "name": "tdd"
+      },
+      "output": "<skill_content name=\"tdd\">\n# Skill: tdd\n\n# Teste primeiro, uma fatia por vez\r\n\r\nO ciclo é: **um teste que falha → o código mínimo que faz ele passar → a próxima fatia.**\r\nNada de escrever a suíte inteira e depois o código inteiro.\r\n\r\nVocê precisa de uma spec com regras numeradas. Sem ela, pare: você vai acabar testando o\r\nque você mesmo inventou. Sem contrato, verde não significa nada.\r\n\r\n## Onde o teste mora\r\n\r\nTeste verifica **comportamento pela interface pública**, nunca implementação. Aqui a\r\ninterface é HTTP: suba o servidor com `criarServidor()` e fale por `fetch`. Não importe\r\nserviço nem repositório no teste — se importar, o teste quebra quando você refatorar\r\nsem que o comportamento tenha mudado.\r\n\r\nPadrão do projeto: `node --test`, `node:assert/strict`, um arquivo em `verificacoes/`,\r\nespelhando `verificacoes/livros.spec.js`. Sem framework, sem dependência, sem mock.\r\n\r\n## O ciclo, por fatia\r\n\r\nPara cada fatia da spec, nesta ordem:\r\n\r\n1. Escreva **um** teste que prova **um** critério de aceite. O nome do teste é a regra\r\n   em português: `it('recusa o quarto empréstimo ativo do mesmo leitor')`.\r\n2. Rode. **Ele tem que falhar.** Teste que passa antes do código existir não está\r\n   testando nada — descubra por quê antes de seguir.\r\n3. Escreva o mínimo de código que faz ele passar. Nada de já implementar a regra\r\n   seguinte \"que eu vou precisar mesmo\".\r\n4. Rode a suíte inteira. Verde? Próxima fatia.\r\n\r\nSó passe para a fatia seguinte com a suíte inteira verde.\r\n\r\n## A regra que não se quebra\r\n\r\n**Quando o teste falha, o suspeito é o código.**\r\n\r\nSe você mudar um teste para ele passar, você trocou o contrato pela sua implementação e\r\no verde virou enfeite. Só se altera um teste quando a **spec** mudou — e aí você diz, em\r\nvoz alta, qual regra da spec mudou e por quê.\r\n\r\nVale para o valor esperado, para o status HTTP e para o cenário. Trocar\r\n`assert.equal(dias, 14)` por `assert.equal(dias, 7)` porque o código deu 7 é a forma mais\r\ncomum de mentir sozinho.\r\n\r\n## Três testes que não valem nada\r\n\r\n- **Acoplado à implementação** — chama serviço ou repositório direto, ou confere o dado\r\n  espiando o `Map` em vez de pedir pela API. Quebra em refatoração, não em regressão.\r\n- **Tautológico** — o esperado é calculado do mesmo jeito que o código calcula\r\n  (`assert.equal(multa, dias * 1.5)`). Passa por construção, nunca discorda do código.\r\n  O valor esperado vem da spec, escrito na mão: `assert.equal(multa, 4.5)`.\r\n- **Frouxo** — confere só o status e ignora o corpo. `201` com o prazo errado passa.\r\n\r\n## Fechamento\r\n\r\nTerminada a última fatia, rode a suíte inteira uma vez e relate o número real que\r\napareceu na saída. Não estime, não arredonde, não repita um número de outra rodada.\n\nBase directory for this skill: C:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\skills\\tdd\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>",
+      "metadata": {
+       "name": "tdd",
+       "dir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\.opencode\\skills\\tdd",
+       "truncated": false
+      },
+      "title": "Loaded skill: tdd",
+      "time": {
+       "start": 1789849880776,
+       "end": 1789849880891
+      }
+     },
+     "id": "prt_0bb5dc87e001WBaMJb2xvUZGTd",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dae40001yzxuIT9CiGeAtv"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-finish",
+     "tokens": {
+      "total": 10105,
+      "input": 332,
+      "output": 45,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 9728
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5dcb35001CrvrrT5dEFzBB8",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dae40001yzxuIT9CiGeAtv"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 11200,
+     "input": 1099,
+     "output": 117,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 9984
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849881915,
+     "completed": 1789849884619
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5dcd3b001m4dw4zsi6R1C07",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-start",
+     "id": "prt_0bb5dd29e0016VEjP1xT63htXL",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dcd3b001m4dw4zsi6R1C07"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_75bda1cab03c499c9d579660",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\specs\\M3-presenca.md"
+      },
+      "output": "[13979 caracteres omitidos]",
+      "title": "specs\\M3-presenca.md",
+      "time": {
+       "start": 1789849883457,
+       "end": 1789849883501
+      }
+     },
+     "id": "prt_0bb5dd2a3001OMFZ6kj8mqGZxC",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dcd3b001m4dw4zsi6R1C07"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_eab3845464f4457ab3678740",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api"
+      },
+      "output": "[225 caracteres omitidos]",
+      "title": "api",
+      "time": {
+       "start": 1789849883578,
+       "end": 1789849883588
+      }
+     },
+     "id": "prt_0bb5dd37300121NJmU6bLXDYmJ",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dcd3b001m4dw4zsi6R1C07"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-finish",
+     "tokens": {
+      "total": 11200,
+      "input": 1099,
+      "output": 117,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 9984
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5dd5de001tzbBj0WQcNxgeh",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dcd3b001m4dw4zsi6R1C07"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 16643,
+     "input": 5417,
+     "output": 218,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 11008
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849884628,
+     "completed": 1789849887784
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5dd7d4001TdshJLZtDl1C9C",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-start",
+     "id": "prt_0bb5ddd10001iajVYtYAwvOnVe",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dd7d4001TdshJLZtDl1C9C"
+    },
+    {
+     "type": "reasoning",
+     "text": "Let me explore the existing code and tests to understand what's already implemented. The Fatia 3 is about R11 — offline synchronization: `qr_offline`, `lidoEm` verification, `SINCRONIZACAO_TARDIA` after 2h from `fim`, `lidoEm` future → vale envio.\n\nLet me look at the existing structure.",
+     "time": {
+      "start": 1789849886014,
+      "end": 1789849886298
+     },
+     "id": "prt_0bb5ddd3e001X2HbF2ADdvOBXh",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dd7d4001TdshJLZtDl1C9C"
+    },
+    {
+     "type": "tool",
+     "tool": "glob",
+     "callID": "call_2186e6de1bce479eb7bb01ac",
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "api/src/**/*.ts"
+      },
+      "output": "[14 caracteres omitidos]",
+      "title": "api",
+      "time": {
+       "start": 1789849886393,
+       "end": 1789849886519
+      }
+     },
+     "id": "prt_0bb5dde5f0018P9BIDMN4h5p6g",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dd7d4001TdshJLZtDl1C9C"
+    },
+    {
+     "type": "tool",
+     "tool": "glob",
+     "callID": "call_6ec38ccd31ca4a95a93c4f78",
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "api/verificacoes/*.ts"
+      },
+      "output": "[14 caracteres omitidos]",
+      "title": "api",
+      "time": {
+       "start": 1789849886441,
+       "end": 1789849886549
+      }
+     },
+     "id": "prt_0bb5ddebe001jEXrwoISVaFR0I",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dd7d4001TdshJLZtDl1C9C"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_4507c6a6df44410aa7c21b31",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\package.json"
+      },
+      "output": "[808 caracteres omitidos]",
+      "title": "api\\package.json",
+      "time": {
+       "start": 1789849886589,
+       "end": 1789849886658
+      }
+     },
+     "id": "prt_0bb5ddeef0010TNp5ssPA0wMTa",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dd7d4001TdshJLZtDl1C9C"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-finish",
+     "tokens": {
+      "total": 16643,
+      "input": 5417,
+      "output": 218,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 11008
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5de227001m7cULmB8A3ZXRV",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dd7d4001TdshJLZtDl1C9C"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 17157,
+     "input": 358,
+     "output": 159,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 16640
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849887792,
+     "completed": 1789849893511
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5de430001Uib0T2A9Z5HvJQ",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-start",
+     "id": "prt_0bb5dea5f001ZQ9VZduMlsHDzk",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5de430001Uib0T2A9Z5HvJQ"
+    },
+    {
+     "type": "reasoning",
+     "text": "The glob didn't find files? Let me check again. Maybe the glob pattern is relative to working dir which is `api`. Let me try.",
+     "time": {
+      "start": 1789849889467,
+      "end": 1789849889573
+     },
+     "id": "prt_0bb5deabb001zZUt05aKKUKlcz",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5de430001Uib0T2A9Z5HvJQ"
+    },
+    {
+     "type": "tool",
+     "tool": "glob",
+     "callID": "call_08fec75a2b50496fb3770e0f",
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "src/**/*.ts"
+      },
+      "output": "[565 caracteres omitidos]",
+      "title": "api",
+      "time": {
+       "start": 1789849889590,
+       "end": 1789849889758
+      }
+     },
+     "id": "prt_0bb5deb29001xQkRaV7GXq7Duu",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5de430001Uib0T2A9Z5HvJQ"
+    },
+    {
+     "type": "tool",
+     "tool": "glob",
+     "callID": "call_251101917ef84206a74ce426",
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "verificacoes/*"
+      },
+      "output": "[229 caracteres omitidos]",
+      "title": "api",
+      "time": {
+       "start": 1789849889791,
+       "end": 1789849889944
+      }
+     },
+     "id": "prt_0bb5deb3a0011KCM3IQqSpUwe1",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5de430001Uib0T2A9Z5HvJQ"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_eaff683d3de845cbb9eec8c8",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "Get-ChildItem -Recurse -File src, verificacoes | Select-Object FullName"
+      },
+      "output": "\r\nFullName                                                                       \r\n--------                                                                       \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\db.ts                          \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\server.ts                      \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\types.d.ts                     \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\middleware\\auth.ts             \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\atividades.ts            \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\encontros.ts             \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts             \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\salas.ts                 \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\teste.ts                 \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\encontros.spec.ts     \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\infraestrutura.spec.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas.spec.ts     \r\n\r\n\r\n",
+      "metadata": {
+       "output": "\r\nFullName                                                                       \r\n--------                                                                       \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\db.ts                          \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\server.ts                      \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\types.d.ts                     \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\middleware\\auth.ts             \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\atividades.ts            \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\encontros.ts             \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts             \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\salas.ts                 \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\teste.ts                 \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\encontros.spec.ts     \r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\infraestrutura.spec.ts\r\nC:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas.spec.ts     \r\n\r\n\r\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "Get-ChildItem -Recurse -File src, verificacoes | Select-Object FullName",
+      "time": {
+       "start": 1789849889815,
+       "end": 1789849892473
+      }
+     },
+     "id": "prt_0bb5dec04001JVaGYFGA9jW1dh",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5de430001Uib0T2A9Z5HvJQ"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-finish",
+     "tokens": {
+      "total": 17157,
+      "input": 358,
+      "output": 159,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 16640
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5df88f001QXzALDVN0TDxZx",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5de430001Uib0T2A9Z5HvJQ"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 18039,
+     "input": 766,
+     "output": 121,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 17152
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849893521,
+     "completed": 1789849897578
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5dfa900015PPcZkI4evfmAy",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-start",
+     "id": "prt_0bb5e04f7001hPQkatgBLSnrwP",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dfa900015PPcZkI4evfmAy"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_3d922b3299114e9196018a89",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\server.ts"
+      },
+      "output": "[1524 caracteres omitidos]",
+      "title": "api\\src\\server.ts",
+      "time": {
+       "start": 1789849896421,
+       "end": 1789849896448
+      }
+     },
+     "id": "prt_0bb5e0532001XN1Jr3FLKazevj",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dfa900015PPcZkI4evfmAy"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_e438877adeaf4d7db51ae505",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\db.ts"
+      },
+      "output": "[7091 caracteres omitidos]",
+      "title": "api\\src\\db.ts",
+      "time": {
+       "start": 1789849896542,
+       "end": 1789849896599
+      }
+     },
+     "id": "prt_0bb5e05e9001ikBEayU6JAHQKX",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dfa900015PPcZkI4evfmAy"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-finish",
+     "tokens": {
+      "total": 18039,
+      "input": 766,
+      "output": 121,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 17152
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5e0871001XkzI1p0ctDFitj",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5dfa900015PPcZkI4evfmAy"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 20950,
+     "input": 2798,
+     "output": 232,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 17920
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849897585,
+     "completed": 1789849901316
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5e0a71001Cv4Q20A7gNAa85",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-start",
+     "id": "prt_0bb5e0fd0001qAO3qaU6t4Uez5",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e0a71001Cv4Q20A7gNAa85"
+    },
+    {
+     "type": "reasoning",
+     "text": "Let me look at the existing rotas, particularly presencas.ts, encontros.ts, and the test files encontros.spec.ts and presencas.spec.ts. Also teste.ts for the reset route.",
+     "time": {
+      "start": 1789849898977,
+      "end": 1789849899217
+     },
+     "id": "prt_0bb5e0fe1001qfAyhocnbTYxvU",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e0a71001Cv4Q20A7gNAa85"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_c505af6c1dff46f4a0646979",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts"
+      },
+      "output": "[5532 caracteres omitidos]",
+      "title": "api\\src\\rotas\\presencas.ts",
+      "time": {
+       "start": 1789849899448,
+       "end": 1789849899471
+      }
+     },
+     "id": "prt_0bb5e10d5001I28JjIZ5Dp2wua",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e0a71001Cv4Q20A7gNAa85"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_a1bf49996b2349e0a8f90292",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\encontros.ts"
+      },
+      "output": "[3648 caracteres omitidos]",
+      "title": "api\\src\\rotas\\encontros.ts",
+      "time": {
+       "start": 1789849899916,
+       "end": 1789849900016
+      }
+     },
+     "id": "prt_0bb5e11c0001paDaZV3iYN338S",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e0a71001Cv4Q20A7gNAa85"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_bff4ee1856e6472e89da5f80",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\teste.ts"
+      },
+      "output": "[1250 caracteres omitidos]",
+      "title": "api\\src\\rotas\\teste.ts",
+      "time": {
+       "start": 1789849900215,
+       "end": 1789849900318
+      }
+     },
+     "id": "prt_0bb5e1440001CI14PTahqV42XR",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e0a71001Cv4Q20A7gNAa85"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-finish",
+     "tokens": {
+      "total": 20950,
+      "input": 2798,
+      "output": 232,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 17920
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5e16f5001C2cvdeAB4bNtFs",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e0a71001Cv4Q20A7gNAa85"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 24496,
+     "input": 3610,
+     "output": 150,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 20736
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849901325,
+     "completed": 1789849904094
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5e190d001PGtahBpT5tO3w6",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-start",
+     "id": "prt_0bb5e1e270013wdfUFKBfgDmD1",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e190d001PGtahBpT5tO3w6"
+    },
+    {
+     "type": "reasoning",
+     "text": "Now let me look at the current test files to understand the testing patterns.",
+     "time": {
+      "start": 1789849902655,
+      "end": 1789849902730
+     },
+     "id": "prt_0bb5e1e3f001Ov3ST6Mxx2dutl",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e190d001PGtahBpT5tO3w6"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_b8a41089f9b242d9a0d40852",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas.spec.ts"
+      },
+      "output": "[11688 caracteres omitidos]",
+      "title": "api\\verificacoes\\presencas.spec.ts",
+      "time": {
+       "start": 1789849902942,
+       "end": 1789849902966
+      }
+     },
+     "id": "prt_0bb5e1e9c0014zLxfnnRMl2rQ3",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e190d001PGtahBpT5tO3w6"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_92786f5a203d438aadb8226b",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\encontros.spec.ts"
+      },
+      "output": "[6362 caracteres omitidos]",
+      "title": "api\\verificacoes\\encontros.spec.ts",
+      "time": {
+       "start": 1789849903030,
+       "end": 1789849903077
+      }
+     },
+     "id": "prt_0bb5e1f62001mN71DujMuf4mJo",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e190d001PGtahBpT5tO3w6"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-finish",
+     "tokens": {
+      "total": 24496,
+      "input": 3610,
+      "output": 150,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 20736
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5e22040016jjpYpq9ehQ8PH",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e190d001PGtahBpT5tO3w6"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 33586,
+     "input": 6490,
+     "output": 2776,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 24320
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849904103,
+     "completed": 1789849929492
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5e23e7001dedPEOk6BdGQnY",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-start",
+     "id": "prt_0bb5e2c3b001fol4kX4UWxSBqD",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e23e7001dedPEOk6BdGQnY"
+    },
+    {
+     "type": "reasoning",
+     "text": "Now I understand the structure. Fatia 3 is about R11: offline sync.\n\nR11: Com `lidoEm` informado, a presença é offline (`origem = \"qr_offline\"`). Janela (R6) e código (R14) são verificados no instante do `lidoEm`, não no do envio. Se `lidoEm` for posterior ao envio, vale o instante do envio. O envio com `lidoEm` é aceito até 2 horas após o `fim` do encontro; além disso → `422 SINCRONIZACAO_TARDIA`.\n\nFatia 3 criteria (from the slice description):\n- R11: verificação por `lidoEm`, `lidoEm` futuro → vale o envio, `SINCRONIZACAO_TARDIA` após 2 h do fim, `origem=\"qr_offline\"`\n\nRelevant acceptance criteria:\n- 17. (R11) POST `/encontros/:id/presencas` com `lidoEm` dentro da janela, código válido nesse instante e envio dentro de 2 h após o `fim` → 201, `origem=\"qr_offline\"`\n- 18. (R11) POST `/encontros/:id/presencas` com `lidoEm` dentro da janela, mas envio após 2 h do `fim` do encontro → 422 `SINCRONIZACAO_TARDIA`\n- 19. (R11) POST `/encontros/:id/presencas` com `lidoEm` posterior ao envio → janela e código verificados pelo instante do envio\n\nSo I'll write these as tests. Let me think through R11 more carefully.\n\nThe delivery via `lidoEm`:\n- `lidoEm` > `fim + 2h`? No. The check is: envio (o instante do envio = relógio do servidor? The send instant = \"instante do envio\"). Hmm. Let's re-read: \"O envio com `lidoEm` é aceito até 2 horas após o `fim` do encontro; além disso → 422 `SINCRONIZACAO_TARDIA`.\"\n\nSo the tardiness check compares... the \"envio\" — the effective send time. Let me parse R11:\n\n\"Com `lidoEm` informado, a presença é offline (`origem = \"qr_offline\"`). Janela (R6) e código (R14) são verificados no instante do `lidoEm`, não no do envio. Se `lidoEm` for posterior ao envio, vale o instante do envio. O envio com `lidoEm` é aceito até 2 horas após o `fim` do encontro; além disso → 422 `SINCRONIZACAO_TARDIA`.\"\n\nSo the \"instante efetivo\" (effective instant) is:\n- `min(lidoEm, envio)` — the earlier of lidoEm and envio time. R8/R11: \"A presença online só é aceita se o instante efetivo (R8/R11) estiver no intervalo...\". Actually R8 is the no-lidoEm case where instante efetivo = agora. R11 defines the effective instant for offline: janela and código checked at `lidoEm` time, but \"se lidoEm for posterior ao envio, vale o instante do envio\". So instante efetivo = min(lidoEm, envioTime).\n\nThe sync check: \"O envio com lidoEm é aceito até 2 horas após o fim do encontro\" — the *envio* (the time when the request is sent, i.e., the server clock at arrival) must be ≤ fim + 2h. Beyond that → SINCRONIZACAO_TARDIA.\n\nWait, but what about \"Se lidoEm for posterior ao envio, vale o instante do envio\"? In that case janela/código are checked at envio time.\n\nSo the algorithm for offline POST (with lidoEm):\n1. instantSend = relógio do servidor no envio (agora)\n2. effectiveInstant = min(lidoEm, instantSend)\n3. If instantSend > fim + 2h → 422 SINCRONIZACAO_TARDIA (this check precedes FORA_DA_JANELA per R13, but R13 is Fatia 4). For Fatia 3, we implement per R11 only.\n\nActually wait, in the slice ordering there's a subtlety: R13 (Precedência) is Fatia 4. So in Fatia 3, we just implement R11 behavior without worrying about precedence ordering among multiple error cases. But the tests only test single-error scenarios per criterion, so implementing basic behavior is fine. However, I must not implement the precedence rules (Fatia 4). I just implement the R11 behavior straightforwardly.\n\nLet me carefully re-read R11's sync bound. \"O envio com `lidoEm` é aceito até 2 horas após o `fim` do encontro; além disso → `422 SINCRONIZACAO_TARDIA`.\"\n\nSo the bound is on... \"o envio\" (the sending). Given \"Se lidoEm for posterior ao envio, vale o instante do envio\" for janela/código checks. The 2h-after-fim check is on the sending instant (the server clock when the request arrives). Actually let me think about the scenario 18: \"POST com lidoEm dentro da janela, mas envio após 2 h do fim do encontro → 422 SINCRONIZACAO_TARDIA\". Yes, envio = server clock when the request arrives.\n\nScenario 19: \"POST com lidoEm posterior ao envio → janela e código verificados pelo instante do envio\". So effective = envio.\n\nLet me define:\n- agora (envio) = server clock\n- lidoEm given\n- If lidoEm > agora → effective instant = agora (envio); otherwise effective = lidoEm.\n- Check the \"SINCRONIZACAO_TARDIA\": is the bound on agora (envio)? \"O envio com lidoEm é aceito até 2 horas após o fim\" — the sending time. So if agora > fim + 2h → SINCRONIZACAO_TARDIA.\n\nHmm wait, but what if lidoEm <= agora but agora is within 2h past fim? E.g. encontro fim=11:00, envio at 12:30, lidoEm at 10:20 (within janela). Then janela ok (lidoEm 10:20 within [09:45, 10:30]), código checked at lidoEm. Envio 12:30 ≤ 13:00 (fim+2h) → accepted, origem=qr_offline, lidoEm=10:20 stored.\n\nWhat about effective instant check for janela: does the effective instant also need to be within the presence window [inicio-15, inicio+30]? Yes, R6: \"A presença online só é aceita se o instante efetivo (R8/R11) estiver no intervalo...\". So if effectiveInstant outside → FORA_DA_JANELA.\n\nNow for Fatia 3, I'll implement in presencas.ts:\n- Parse `lidoEm` from body (optional).\n- If present, treat as offline:\n  - Const agora = server clock.\n  - lidoMs = new Date(lidoEm).getTime()\n  - envio = agora\n  - if envio > fim + 2h → SINCRONIZACAO_TARDIA\n  - effective = min(lidoMs, envio)\n  - janela check on effective\n  - código check on effective\n  - origem = \"qr_offline\", lidoEm stored = lidoEm (as given), registradaEm = envio time.\n\nWait — but for the stored `lidoEm`: the model says offline: lidoEm = informado (the given lidoEm value). Even if lidoEm is in the future (posterior ao envio), we store the given lidoEm? R12 says second attempt returns original without changing. In scenario 19, \"janela e código verificados pelo instante do envio\" - so effective for validation, but the stored lidoEm is the given one. The model: \"lidoEm ... offline: informado\". So we store the informed value.\n\nHmm, but wait. Actually let me reconsider: if lidoEm is posterior ao envio, does the store keep lidoEm = informed future value, or lidoEm = envio? The model field spec: \"lidoEm (string ISO ou null) | online sem lidoEm: derivado = registradaEm; offline: informado; manual: nulo\". So offline stores the informed lidoEm. Good.\n\nNow, should the body validation accept lidoEm as string? Currently the body validation: `typeof corpo.codigo !== \"string\" || corpo.codigo.length !== 6` → DADOS_INVALIDOS. I need to add optional lidoEm parsing. What about invalid lidoEm format → DADOS_INVALIDOS? The spec doesn't define specifics of lidoEm validation (dado inválido). It says body 422 DADOS_INVALIDOS. I'll validate that if lidoEm is present, it must be a valid ISO date string, else DADOS_INVALIDOS. Actually to be minimal, I can check: if lidoEm present and not a string → DADOS_INVALIDOS; and if not parseable → DADOS_INVALIDOS. Keep minimal.\n\nNow, the tests. Fatia 3 tests (per acceptance criteria 17, 18, 19). Let me create a new spec file `verificacoes/presencas_offline.spec.ts`? Or add to existing presencas.spec.ts? AGENTS.md says \"Testes em verificacoes/*.spec.ts, um arquivo por fatia/funcionalidade.\" So a new file per fatia would be consistent — actually fatia 1 has encontros.spec.ts and fatia 2 has presencas.spec.ts. For fatia 3, I could create `presencas-offline.spec.ts`.\n\nNote the server is created once (cached db in server.ts). createServer uses a shared dbInstance. Each spec file starts its own server on its own port. Since db is cached across the process... wait, `getDb()` is cached in module-level `cachedDb`, and `inicializarBanco()` caches `dbInstance`. So multiple spec files share the same underlying db file. That's how existing tests run (encontros and presencas on different ports but same db). Each test does POST /_teste/reset which resets the DB. Since tests run sequentially in one process by default? `npm test` runs `tsx --test verificacoes/*.spec.ts`. Node test runner runs each file potentially concurrently in separate processes (default concurrency is based on CPUs for files?). Actually `node --test` runs test files in parallel in separate child processes. Hmm, but each child process would have its own module cache and its own db file — they'd share the same data/semana.db file on disk, but each holds its own copy in memory. That could cause conflicts (both writing to same file). But the existing setup with two spec files already works presumably. Actually wait — do they run in parallel and conflict? Each process loads the DB from the file at startup (or creates). Then each runs its tests with reset (which deletes rows and re-seeds), writing to the same file. If they run in parallel, they'd clobber each other's file but in-memory they're independent, so tests still pass within each process. The file on disk just ends up with the last writer's data. So it's fine.\n\nLet me check: are the existing tests passing currently? Let me run the full test suite to establish a baseline before writing Fatia 3 tests.\n\nLet me run `npm test` now.",
+     "time": {
+      "start": 1789849906240,
+      "end": 1789849922805
+     },
+     "id": "prt_0bb5e2c4000183akk0D1nEIqBt",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e23e7001dedPEOk6BdGQnY"
+    },
+    {
+     "type": "text",
+     "text": "Now let me run the current test suite to establish a baseline.\n\n",
+     "time": {
+      "start": 1789849922813,
+      "end": 1789849923139
+     },
+     "id": "prt_0bb5e6cfd0011tu0Oxl9QZH1te",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e23e7001dedPEOk6BdGQnY"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_a10b04e45da6468c8fd1abee",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "npm test 2>&1",
+       "workdir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api"
+      },
+      "output": "\n> semana-academica-api@1.0.0 test\n> tsx --test verificacoes/*.spec.ts\n\n▶ M3 Fatia 1 - Código do encontro\n  ✔ R4 - consultas na mesma janela devolvem o mesmo código; na janela seguinte, outro (178.9219ms)\n  ✔ R3 - relógio em 10:15:30: trocaEm=10:16:00 e validoAte=10:17:00 (38.9054ms)\n  ✔ R2 - encontro de atividade cancelada (relógio dentro da janela) retorna 422 ATIVIDADE_CANCELADA (32.5602ms)\n  ✔ R1 - fora da janela 16 min antes do início retorna 422 FORA_DA_JANELA (35.6918ms)\n  ✔ R1 - fora da janela 31 min após o início retorna 422 FORA_DA_JANELA (28.9888ms)\n  ✔ R1 - bordas da janela de obtenção: início - 15 min e início + 30 min retornam 200 (38.4658ms)\n✔ M3 Fatia 1 - Código do encontro (515.2952ms)\n▶ Modo de teste - infraestrutura\n  ✔ POST /_teste/reset retorna 204 (116.7619ms)\n  ✔ após reset, GET /_teste/relogio retorna o relógio inicial 2026-10-13T09:00:00-03:00 (27.1022ms)\n  ✔ após reset, dados iniciais de usuários são carregados (24.5623ms)\n  ✔ após reset, dados iniciais de salas são carregados (22.6055ms)\n  ✔ sem MODO_TESTE, rotas /_teste/* retornam 404 (78.392ms)\n✔ Modo de teste - infraestrutura (423.7495ms)\n▶ M3 Fatia 2 - Presença online básica\n  ✔ R8 - POST sem lidoEm de inscrito confirmado retorna 201 com origem='qr' e lidoEm=registradaEm=relógio (164.0375ms)\n  ✔ R7 - POST de participante com inscrição em_espera retorna 403 NAO_INSCRITO (45.0275ms)\n  ✔ R6 - POST com relógio fora de [inicio-15, inicio+30] retorna 422 FORA_DA_JANELA (47.4726ms)\n  ✔ R6 - POST com relógio em inicio+30 min:00 (borda) retorna 201 (44.9785ms)\n  ✔ R9 - POST com código que nunca foi gerado retorna 422 CODIGO_INVALIDO (36.8596ms)\n  ✔ R14 - POST com o código da janela anterior (dentro da janela de presença) retorna 201 (42.3013ms)\n  ✔ R12 - segundo POST do mesmo participante/encontro retorna 200 mantendo lidoEm/registradaEm/origem (31.9063ms)\n  ✔ R9 - POST com código já expirado (fora das janelas atual e anterior) retorna 422 CODIGO_INVALIDO (27.1673ms)\n  ✔ R5 - validade do código é restrita ao par (encontro, janela): código de outro encontro é rejeitado (37.8147ms)\n✔ M3 Fatia 2 - Presença online básica (649.3358ms)\nℹ tests 20\nℹ suites 3\nℹ pass 20\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1953.3439\n",
+      "metadata": {
+       "output": "\n> semana-academica-api@1.0.0 test\n> tsx --test verificacoes/*.spec.ts\n\n▶ M3 Fatia 1 - Código do encontro\n  ✔ R4 - consultas na mesma janela devolvem o mesmo código; na janela seguinte, outro (178.9219ms)\n  ✔ R3 - relógio em 10:15:30: trocaEm=10:16:00 e validoAte=10:17:00 (38.9054ms)\n  ✔ R2 - encontro de atividade cancelada (relógio dentro da janela) retorna 422 ATIVIDADE_CANCELADA (32.5602ms)\n  ✔ R1 - fora da janela 16 min antes do início retorna 422 FORA_DA_JANELA (35.6918ms)\n  ✔ R1 - fora da janela 31 min após o início retorna 422 FORA_DA_JANELA (28.9888ms)\n  ✔ R1 - bordas da janela de obtenção: início - 15 min e início + 30 min retornam 200 (38.4658ms)\n✔ M3 Fatia 1 - Código do encontro (515.2952ms)\n▶ Modo de teste - infraestrutura\n  ✔ POST /_teste/reset retorna 204 (116.7619ms)\n  ✔ após reset, GET /_teste/relogio retorna o relógio inicial 2026-10-13T09:00:00-03:00 (27.1022ms)\n  ✔ após reset, dados iniciais de usuários são carregados (24.5623ms)\n  ✔ após reset, dados iniciais de salas são carregados (22.6055ms)\n  ✔ sem MODO_TESTE, rotas /_teste/* retornam 404 (78.392ms)\n✔ Modo de teste - infraestrutura (423.7495ms)\n▶ M3 Fatia 2 - Presença online básica\n  ✔ R8 - POST sem lidoEm de inscrito confirmado retorna 201 com origem='qr' e lidoEm=registradaEm=relógio (164.0375ms)\n  ✔ R7 - POST de participante com inscrição em_espera retorna 403 NAO_INSCRITO (45.0275ms)\n  ✔ R6 - POST com relógio fora de [inicio-15, inicio+30] retorna 422 FORA_DA_JANELA (47.4726ms)\n  ✔ R6 - POST com relógio em inicio+30 min:00 (borda) retorna 201 (44.9785ms)\n  ✔ R9 - POST com código que nunca foi gerado retorna 422 CODIGO_INVALIDO (36.8596ms)\n  ✔ R14 - POST com o código da janela anterior (dentro da janela de presença) retorna 201 (42.3013ms)\n  ✔ R12 - segundo POST do mesmo participante/encontro retorna 200 mantendo lidoEm/registradaEm/origem (31.9063ms)\n  ✔ R9 - POST com código já expirado (fora das janelas atual e anterior) retorna 422 CODIGO_INVALIDO (27.1673ms)\n  ✔ R5 - validade do código é restrita ao par (encontro, janela): código de outro encontro é rejeitado (37.8147ms)\n✔ M3 Fatia 2 - Presença online básica (649.3358ms)\nℹ tests 20\nℹ suites 3\nℹ pass 20\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1953.3439\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "npm test 2>&1",
+      "time": {
+       "start": 1789849923008,
+       "end": 1789849928604
+      }
+     },
+     "id": "prt_0bb5e6d48001IZvejNhbaJ2xP5",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e23e7001dedPEOk6BdGQnY"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-finish",
+     "tokens": {
+      "total": 33586,
+      "input": 6490,
+      "output": 2776,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 24320
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5e857300190hlGpqWEIsAXq",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e23e7001dedPEOk6BdGQnY"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 37565,
+     "input": 1173,
+     "output": 3112,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 33280
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849929504,
+     "completed": 1789849951459
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5e871f001VcvpSlnBKTcn9x",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-start",
+     "id": "prt_0bb5e8ce5001Jjfl0nVTM7a5D5",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e871f001VcvpSlnBKTcn9x"
+    },
+    {
+     "type": "reasoning",
+     "text": "Baseline: 20 tests pass. Now, for Fatia 3, I need to write tests for R11.\n\nLet me plan the three tests (per acceptance criteria 17, 18, 19):\n\n1. **AC17**: POST com `lidoEm` dentro da janela, código válido nesse instante e envio dentro de 2h após o fim → 201, `origem=\"qr_offline\"`.\n\nSetup: reset at 10:15:30, inscrição confirmada. Get código at 10:15:30 (window 10:15:00). Now we want lidoEm at a time within the window where that código is valid. E.g., lidoEm = 10:15:30 (the current minute window 10:15:00-10:15:59). Send right away (envio = 10:15:30, within 2h after fim 11:00). Expect 201, origem=qr_offline, lidoEm = the given value, registradaEm = agora.\n\nActually the test should simulate offline reading: the person scanned at a time in the past. E.g. reset clock to 10:15:30, get code. Then set clock to 10:15:40, then POST with lidoEm=10:15:30. The code for 10:15:30 window is the same at 10:15:40 (same window). registradaEm would be 10:15:40. Being within 2h after fim → 201, origem qr_offline, lidoEm=10:15:30 (given), registradaEm=10:15:40.\n\nHmm, but simpler: get code at 10:15:30, then POST immediately with lidoEm also 10:15:30. That works too. But to demonstrate \"lidoEm dentro da janela, código válido nesse instante e envio dentro de 2h do fim\" — maybe advance clock a bit to show registradaEm differs from lidoEm. Let me make the test robust:\n\n- reset to \"2026-10-19T10:15:30-03:00\" with inscrição confirmada.\n- get code via GET /codigo → code valid in window 10:15:00-10:15:59.\n- PUT relogio to \"2026-10-19T10:15:50-03:00\" (same window, so code still valid at lidoEm 10:15:30)\n- POST presencas with { codigo, lidoEm: \"2026-10-19T10:15:30-03:00\" }\n- Expect 201, origem \"qr_offline\", lidoEm === \"2026-10-19T10:15:30-03:00\" (given), registradaEm === 10:15:50, justificativa null.\n\nWait — stored lidoEm as informed \"2026-10-19T10:15:30-03:00\" — will the response echo exactly? presencaParaObjeto returns row.lido_em which is stored as informed string. The body we send has the offset -03:00. We store the raw string. Response would be exactly that string \"2026-10-19T10:15:30-03:00\"? Let me check the response building. In the existing code, for online they convert to ISO (`new Date(agoraMs).toISOString()`), which is UTC Z format. For offline, R11 says lidoEm = informado. So we store `corpo.lidoEm` as string directly. The test should compare via `new Date(...).getTime()` or toISOString to be robust against format differences. I'll compare normalized ISO.\n\nActually let me be careful: if I store the informed string and return it as-is, then comparing `new Date(body.lidoEm).toISOString() === new Date(\"2026-10-19T10:15:30-03:00\").toISOString()` works regardless. Good.\n\n2. **AC18**: POST com `lidoEm` dentro da janela, mas envio após 2h do fim → 422 SINCRONIZACAO_TARDIA.\n\nSetup: reset at 10:15:30, inscrição confirmada, get code. Code valid at lidoEm = 10:15:30 (window 10:15). fim = 11:00, so fim + 2h = 13:00. Set clock to 13:00:01 (envio). POST with { codigo, lidoEm: \"2026-10-19T10:15:30-03:00\" }. Expect 422 SINCRONIZACAO_TARDIA.\n\nWait, but at envio 13:00:01, is the code maybe coincidentally valid? The check for SINCRONIZACAO_TARDIA should happen before código check. In my implementation, I check tardiness first (per precedence R13 which is next fatia, but the tardiness for offline must take precedence over código invalid anyway for this test to pass — if we check código validity at effective=10:15:30 first, code is valid, so no CODIGO_INVALIDO; then tardiness → SINCRONIZACAO_TARDIA). Either order works for this test as long as we eventually return SINCRONIZACAO_TARDIA. Since the code is valid at effective instant, if tardiness is checked after código, we'd return 201. So I must check tardiness. I'll implement tardiness check before the R6/R14 checks.\n\nActually, is the tardiness check based on envio (agora) or effective? Per R11, envio is accepted up to 2h after fim. The 'envio' here — the instant of sending = agora (server clock). So check `agora > fim + 2h` → SINCRONIZACAO_TARDIA. Yes.\n\n3. **AC19**: POST com lidoEm posterior ao envio → janela e código verificados pelo instante do envio.\n\nSetup: reset at 10:15:30, inscrição confirmada, get code at 10:15:30. Then move clock to, say, 10:16:00 (envio). The code from window 10:15 is still valid at envio 10:16:00 (R14: current or previous window accepted; at 10:16:00 the current window is 10:16, previous is 10:15 → code valid). Hmm, but then effective = min(lidoEm, envio) = envio = 10:16:00, and code checked at envio is valid. OK that's a weak test.\n\nBetter: make the code INVALID at the lidoEm future instant but VALID at envio, to prove check uses envio. Wait the scenario: \"lidoEm posterior ao envio → janela e código verificados pelo instante do envio\". If envio is BEFORE lidoEm, then validating using envio means the code must be valid at envio. To prove the point, choose lidoEm in a window where code would be invalid, but envio where it's valid. \n\nExample: get code at 10:15:30 → code valid in window 10:15. Set envio clock to 10:16:30. At envio 10:16:30, code valid (window 10:16 current, 10:15 previous). Set lidoEm to 10:18:00 (future, posterior). If we checked at lidoEm=10:18:00, the code (10:15 window) would be invalid (windows at 10:18: current 10:18, prev 10:17). But since lidoEm > envio, validate at envio=10:16:30 → code valid → 201, origem=qr_offline, lidoEm stored = informed \"10:18:00\"? Hmm wait.\n\nHmm, but if lidoEm is in the future (posterior ao envio), do we store lidoEm = informed future value? The model says offline: lidoEm = informado. So yes store the future value. Interesting. And R12 idempotency keeps it intact.\n\nAlternatively scenario 19 could be interpreted as: at envio time the code must be valid, and window check at envio. Let me make the test:\n\n- reset at 10:15:30, inscrição confirmada\n- get code at 10:15:30 (window 10:15)\n- PUT relogio to 10:16:30 (envio). Code valid at envio (10:16 window or 10:15 prev → valid).\n- POST with codigo, lidoEm = \"2026-10-19T10:18:00-03:00\" (posterior to envio 10:16:30)\n- Expect 201, origem qr_offline. Because effective = envio = 10:16:30, code valid there. If the implementation incorrectly used lidoEm (10:18:00), the code would be rejected → CODIGO_INVALIDO → test fails. \n\nAlso check the window: at envio 10:16:30 it's within [09:45, 10:30]. And envio within 2h after fim (11:00 → 13:00). Good → 201.\n\nAlso, for lidoEm stored: it's the informed \"2026-10-19T10:18:00-03:00\". Fine.\n\nAdditionally, maybe a 4th test: verify janela is checked at lidoEm (not envio) — e.g., lidoEm within janela, envio after janela fimbound... wait envio check is the 2h after fim, not the window. The window check on effective=lidoEm. Example: lidoEm = 10:20 (within [09:45,10:30]), envio = 10:40 (after window ends 10:30 but within 2h after fim). Code valid at lidoEm? Code valid at effective=lidoEm=10:20. So 201. If implementation wrongly checked envio for window → FORA_DA_JANELA → fail. That is a good additional test proving \"janela verificada no lidoEm, não no envio\".\n\nLet me add that as an extra test. But is that a distinct criterion? AC17 covers \"lidoEm dentro da janela... envio dentro de 2h após o fim → 201\". My AC17 test has envio=10:15:50 which is also within the window, so it doesn't prove window checked at lidoEm. Better to design AC17 test so envio is AFTER the window end but within 2h after fim — that proves both \"janela verified at lidoEm\" and \"envio allowed up to 2h after fim\".\n\nLet me redesign:\n\n**AC17 test**: \n- reset at \"2026-10-19T10:15:30-03:00\", get code (window 10:15).\n- PUT relogio to \"2026-10-19T12:00:00-03:00\" (envio; 1h after fim 11:00, within 2h).\n- POST with { codigo, lidoEm: \"2026-10-19T10:15:30-03:00\" }.\n- Expect 201, origem \"qr_offline\", lidoEm=10:15:30, registradaEm=12:00:00.\n- This proves: janela (effective=lidoEm=10:15:30 within [09:45,10:30]) ✓; código valid at lidoEm ✓; envio 12:00 ≤ 13:00 allowed ✓. If implementation used envio for window/código → code invalid at 12:00 (windows 12:00, 11:59) plus FORA_DA_JANELA → fail.\n\nWait but if implementation checks window at envio=12:00 → FORA_DA_JANELA (12:00 > 10:30). And code at envio invalid → CODIGO_INVALIDO. Either way not 201 → test fails against wrong implementation. \n\n**AC18 test**:\n- reset at \"2026-10-19T10:15:30-03:00\", get code.\n- PUT relogio to \"2026-10-19T13:00:01-03:00\" (1 sec after fim+2h).\n- POST with { codigo, lidoEm: \"2026-10-19T10:15:30-03:00\" }.\n- Expect 422 SINCRONIZACAO_TARDIA.\n\n**AC19 test**:\n- reset at \"2026-10-19T10:15:30-03:00\", get code.\n- PUT relogio to \"2026-10-19T10:16:30-03:00\".\n- POST with { codigo, lidoEm: \"2026-10-19T10:18:00-03:00\" } (lidoEm posterior ao envio; code at lidoEm would be invalid).\n- Expect 201, origem \"qr_offline\". Effective = envio.\n\nNow, the tests use the same seed helper pattern as presencas.spec.ts. Since AGENTS says one file per fatia, I'll create `verificacoes/presencas-offline.spec.ts`. But note both files start servers... the port. presencas.spec.ts uses 3011, encontros 3010, infraestrutura probably something. Let me check infraestrutura to pick a free port.\n\nActually, since node --test runs files in separate processes, ports can overlap? Two processes binding same port → conflict. Let me check infraestrutura.spec.ts port.",
+     "time": {
+      "start": 1789849930987,
+      "end": 1789849949788
+     },
+     "id": "prt_0bb5e8ceb00169HRfmmHWPhl3d",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e871f001VcvpSlnBKTcn9x"
+    },
+    {
+     "type": "text",
+     "text": "\n\n",
+     "time": {
+      "start": 1789849949793,
+      "end": 1789849950370
+     },
+     "id": "prt_0bb5ed661001Nf56QDtiFGGHEm",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e871f001VcvpSlnBKTcn9x"
+    },
+    {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_6417597251954dbf9c80f025",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\infraestrutura.spec.ts"
+      },
+      "output": "[4024 caracteres omitidos]",
+      "title": "api\\verificacoes\\infraestrutura.spec.ts",
+      "time": {
+       "start": 1789849950363,
+       "end": 1789849950403
+      }
+     },
+     "id": "prt_0bb5ed666001lSRMP12sDmpclk",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e871f001VcvpSlnBKTcn9x"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-finish",
+     "tokens": {
+      "total": 37565,
+      "input": 1173,
+      "output": 3112,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 33280
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5edae4001zimguxemggSrIX",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5e871f001VcvpSlnBKTcn9x"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 40488,
+     "input": 1488,
+     "output": 1624,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 37376
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849951471,
+     "completed": 1789849963663
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5edcef001gWrrFLjrrRRjL8",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "type": "step-start",
+     "id": "prt_0bb5ee28f001s2FbP2ZKNfHaBU",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5edcef001gWrrFLjrrRRjL8"
+    },
+    {
+     "type": "reasoning",
+     "text": "I'll create a new spec file `verificacoes/presencas-offline.spec.ts` on port 3012, with the TDD cycle.\n\nStep 1: Write the first test (AC17) and run it — it must fail (currently the POST presencas route ignores lidoEm and treats as online; actually it would check window/código at agora. At envio=12:00, codigo from 10:15 window invalid → CODIGO_INVALIDO 422 → test fails. Good, red.)\n\nLet me write the first test only, per the TDD skill.\n\nTest 1 (AC17): lidoEm within window, code valid at that instant, envio within 2h after fim → 201 qr_offline with lidoEm stored and registradaEm=envio.\n\nLet me write the spec file with helper functions similar to presencas.spec.ts, but only include the first test initially. Actually the TDD skill says write ONE test, run, show failing; then implement. Then next test. I'll follow that strictly: start with one test in the file.\n\nLet me write it.",
+     "time": {
+      "start": 1789849952916,
+      "end": 1789849954905
+     },
+     "id": "prt_0bb5ee294001NOTQVcGNI51P7s",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5edcef001gWrrFLjrrRRjL8"
+    },
+    {
+     "type": "text",
+     "text": "Baseline: 20 pass, 0 fail. Now I'll create the Fatia 3 spec file with the first test (AC17 — offline with `lidoEm` within window).\n\n**Teste 1** (prova R11/AC17): envio 1h após o `fim` (dentro das 2h), `lidoEm` dentro da janela com código válido → 201 `qr_offline`.",
+     "time": {
+      "start": 1789849954909,
+      "end": 1789849961843
+     },
+     "id": "prt_0bb5eea5d001u7GObAHm9X2gn1",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5edcef001gWrrFLjrrRRjL8"
+    },
+    {
+     "type": "tool",
+     "tool": "write",
+     "callID": "call_0425bec910f74cccae43a4f6",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts",
+       "content": "import { describe, it, before, after } from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport { createServer } from \"../src/server.js\";\n\nlet server: Awaited<ReturnType<typeof createServer>>;\nconst PORT = 3012;\nconst BASE_URL = `http://localhost:${PORT}`;\n\nasync function fetchJson(path: string, options: RequestInit = {}) {\n  const res = await fetch(`${BASE_URL}${path}`, {\n    ...options,\n    headers: {\n      \"Content-Type\": \"application/json\",\n      ...options.headers,\n    },\n  });\n  const text = await res.text();\n  let body: unknown = null;\n  if (text) {\n    try {\n      body = JSON.parse(text);\n    } catch {\n      body = text;\n    }\n  }\n  return { status: res.status, body, headers: res.headers };\n}\n\nfunction semearEncontro(opts: {\n  inscricoes?: Array<{ participanteId: string; status: string }>;\n} = {}) {\n  const db = server.db;\n  db.run(\n    \"INSERT INTO atividades (id, titulo, tipo, sala_id, vagas, situacao) VALUES (?, 'Palestra de teste', 'palestra', 'sala-101', 40, 'prevista')\",\n    [\"atv_a1b2c3d4\"]\n  );\n  db.run(\n    \"INSERT INTO encontros (id, atividade_id, inicio, fim, ordem) VALUES ('enc_5e6f7a8b', 'atv_a1b2c3d4', ?, ?, 1)\",\n    [\"2026-10-19T10:00:00-03:00\", \"2026-10-19T11:00:00-03:00\"]\n  );\n  for (const i of opts.inscricoes ?? []) {\n    db.run(\n      \"INSERT INTO inscricoes (id, atividade_id, participante_id, status) VALUES (?, 'atv_a1b2c3d4', ?, ?)\",\n      [`ins_${i.participanteId}_${i.status}`, i.participanteId, i.status]\n    );\n  }\n}\n\nasync function resetar(agora: string, opts: Parameters<typeof semearEncontro>[0] = {}) {\n  await fetchJson(\"/_teste/reset\", { method: \"POST\" });\n  await fetchJson(\"/_teste/relogio\", {\n    method: \"PUT\",\n    body: JSON.stringify({ agora }),\n  });\n  semearEncontro(opts);\n}\n\nasync function obterCodigo() {\n  const r = await fetchJson(\"/encontros/enc_5e6f7a8b/codigo\", {\n    headers: { \"X-Usuario\": \"org-ana\" },\n  });\n  assert.equal(r.status, 200);\n  return (r.body as { codigo: string }).codigo;\n}\n\ndescribe(\"M3 Fatia 3 - Presença offline (lidoEm)\", () => {\n  before(async () => {\n    process.env.MODO_TESTE = \"1\";\n    server = await createServer();\n    await new Promise<void>((resolve) => server.listen({ port: PORT }, resolve));\n  });\n\n  after(async () => {\n    await server.close();\n  });\n\n  it(\"R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline'\", async () => {\n    await resetar(\"2026-10-19T10:15:30-03:00\", {\n      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n    });\n\n    const codigo = await obterCodigo();\n\n    await fetchJson(\"/_teste/relogio\", {\n      method: \"PUT\",\n      body: JSON.stringify({ agora: \"2026-10-19T12:00:00-03:00\" }),\n    });\n\n    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n      method: \"POST\",\n      headers: { \"X-Usuario\": \"p-carla\" },\n      body: JSON.stringify({ codigo, lidoEm: \"2026-10-19T10:15:30-03:00\" }),\n    });\n    assert.equal(r.status, 201);\n    const body = r.body as {\n      id: string;\n      encontroId: string;\n      participanteId: string;\n      origem: string;\n      lidoEm: string;\n      registradaEm: string;\n      justificativa: string | null;\n    };\n    assert.match(body.id, /^pre_[0-9a-f]{8}$/);\n    assert.equal(body.encontroId, \"enc_5e6f7a8b\");\n    assert.equal(body.participanteId, \"p-carla\");\n    assert.equal(body.origem, \"qr_offline\");\n    assert.equal(\n      new Date(body.lidoEm).toISOString(),\n      new Date(\"2026-10-19T10:15:30-03:00\").toISOString()\n    );\n    assert.equal(\n      new Date(body.registradaEm).toISOString(),\n      new Date(\"2026-10-19T12:00:00-03:00\").toISOString()\n    );\n    assert.equal(body.justificativa, null);\n  });\n});"
+      },
+      "output": "Wrote file successfully.",
+      "metadata": {
+       "diagnostics": {},
+       "filepath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts",
+       "exists": false,
+       "truncated": false
+      },
+      "title": "api\\verificacoes\\presencas-offline.spec.ts",
+      "time": {
+       "start": 1789849961769,
+       "end": 1789849961788
+      }
+     },
+     "id": "prt_0bb5eec03001a7Gf5PU9kljCT1",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5edcef001gWrrFLjrrRRjL8"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "90c49aa893fb82991575643ace4d7d72bbf1d7e0",
+     "type": "step-finish",
+     "tokens": {
+      "total": 40488,
+      "input": 1488,
+      "output": 1624,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 37376
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5f09a50018CD42JmW5005X2",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5edcef001gWrrFLjrrRRjL8"
+    },
+    {
+     "type": "patch",
+     "hash": "74fa4ea47c8ce64dcc13cbeafef90d1f19e6e8ff",
+     "files": [
+      "C:/Users/ferna_fxhnpvd/semana-academica/api/verificacoes/presencas-offline.spec.ts"
+     ],
+     "id": "prt_0bb5f0c890014mQ3IJCjJlxN3M",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5edcef001gWrrFLjrrRRjL8"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 40603,
+     "input": 55,
+     "output": 100,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 40448
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849963674,
+     "completed": 1789849975735
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5f0c9a001Rl1NC7uNlkenwe",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "90c49aa893fb82991575643ace4d7d72bbf1d7e0",
+     "type": "step-start",
+     "id": "prt_0bb5f1c71001CMTWUM0Od58F9h",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f0c9a001Rl1NC7uNlkenwe"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_d434c630b0f247e1a73c9461",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "npx tsx --test verificacoes/presencas-offline.spec.ts 2>&1",
+       "workdir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api"
+      },
+      "output": "▶ M3 Fatia 3 - Presença offline (lidoEm)\n  ✖ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (141.555ms)\n✖ M3 Fatia 3 - Presença offline (lidoEm) (277.109ms)\nℹ tests 1\nℹ suites 1\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1671.9533\n\n✖ failing tests:\n\ntest at verificacoes\\presencas-offline.spec.ts:77:3\n✖ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (141.555ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  422 !== 201\n  \n      at TestContext.<anonymous> (C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts:94:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1125:7)\n      at async Promise.all (index 0)\n      at async Suite.run (node:internal/test_runner/test:1533:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 422,\n    expected: 201,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+      "metadata": {
+       "output": "▶ M3 Fatia 3 - Presença offline (lidoEm)\n  ✖ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (141.555ms)\n✖ M3 Fatia 3 - Presença offline (lidoEm) (277.109ms)\nℹ tests 1\nℹ suites 1\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1671.9533\n\n✖ failing tests:\n\ntest at verificacoes\\presencas-offline.spec.ts:77:3\n✖ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (141.555ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  422 !== 201\n  \n      at TestContext.<anonymous> (C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts:94:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1125:7)\n      at async Promise.all (index 0)\n      at async Suite.run (node:internal/test_runner/test:1533:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 422,\n    expected: 201,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+       "exit": 1,
+       "truncated": false
+      },
+      "title": "npx tsx --test verificacoes/presencas-offline.spec.ts 2>&1",
+      "time": {
+       "start": 1789849968131,
+       "end": 1789849974719
+      }
+     },
+     "id": "prt_0bb5f1cc10016tHJanCs8Nk5cp",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f0c9a001Rl1NC7uNlkenwe"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "90c49aa893fb82991575643ace4d7d72bbf1d7e0",
+     "type": "step-finish",
+     "tokens": {
+      "total": 40603,
+      "input": 55,
+      "output": 100,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 40448
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5f39b3001FunhQhIQMkF77w",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f0c9a001Rl1NC7uNlkenwe"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 42596,
+     "input": 594,
+     "output": 1554,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 40448
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849975750,
+     "completed": 1789849988018
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5f3bc6001Y8W3cDJTQggxNJ",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "90c49aa893fb82991575643ace4d7d72bbf1d7e0",
+     "type": "step-start",
+     "id": "prt_0bb5f4245001cRm0NtjxOzh0Kn",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f3bc6001Y8W3cDJTQggxNJ"
+    },
+    {
+     "type": "reasoning",
+     "text": "Vermelho confirmado: 422 (porque a rota atual ignora lidoEm e valida no instante do envio, quando o código de 10:15 está inválido → CODIGO_INVALIDO, ou a janela FORA_DA_JANELA). Now implement the minimal code for R11 in presencas.ts.\n\nImplementation plan in presencas.ts POST:\n\nAfter the `codigo` body validation:\n\n```ts\nconst corpo = (req.body ?? {}) as { codigo?: unknown; lidoEm?: unknown };\n// codigo validation as before\n\nconst lidoEm = corpo.lidoEm;\nif (lidoEm !== undefined && typeof lidoEm !== \"string\") {\n  return 422 DADOS_INVALIDOS (\"lidoEm deve ser string ISO\")\n}\n\nconst agoraMs = agoraServidor(app).getTime();\nconst fim = new Date(encontro.fim as string).getTime();\nconst inicio = new Date(encontro.inicio as string).getTime();\n\n// existing-presence check (R12) ... keep\n\n// inscrito check (R7) ... keep after existing check\n\n// offline logic\nlet origem = \"qr\";\nlet lidoMs = agoraMs;\nlet instanteEfetivo = agoraMs;\nif (lidoEm !== undefined) {\n  origem = \"qr_offline\";\n  lidoMs = new Date(lidoEm).getTime();\n  // SINCRONIZACAO_TARDIA if envio(agora) > fim + 2h\n  const limiteSync = fim + 2 * 60 * 60 * 1000;\n  if (agoraMs > limiteSync) {\n    return 422 SINCRONIZACAO_TARDIA\n  }\n  instanteEfetivo = Math.min(lidoMs, agoraMs);\n}\n\n// janela check on instanteEfetivo\nif (instanteEfetivo < inicio - MINUTOS_ANTES || instanteEfetivo > inicio + MINUTOS_DEPOIS) {\n  return 422 FORA_DA_JANELA\n}\n\n// código check on instanteEfetivo\nif (!codigoEhValido(id, corpo.codigo, instanteEfetivo)) {\n  return 422 CODIGO_INVALIDO\n}\n\n// insert\nconst registradaEm = new Date(agoraMs).toISOString();\nconst lidoEmStored = origem === \"qr_offline\" ? lidoEm : registradaEm;\nINSERT ... origem, lido_em = lidoEmStored, registrada_em = registradaEm\n\n// respond 201\n```\n\nWait — ordering issue. Currently the code checks: existing presence → inscrito → janela (agora) → código. Per R13 (next fatia) precedence is NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO. For Fatia 3, I don't implement R13 precedence explicitly, but I need SINCRONIZACAO_TARDIA to be returned when relevant. In my AC18 test: inscrição confirmada → not NAO_INSCRITO; envio after 2h → SINCRONIZACAO_TARDIA should be returned before FORA_DA_JANELA/CODIGO_INVALIDO. In AC18, lidoEm is within window, so FORA_DA_JANELA wouldn't trigger anyway; CODIGO_INVALIDO at effective won't trigger. So returning SINCRONIZACAO_TARDIA regardless of position works for AC18. But returning it before FORA_DA_JANELA for the offline case aligns with R13 later. I'll place the sync check before janela/código checks.\n\nNote: the minimal implementation should not touch the \"no lidoEm\" (online) path, preserving existing R6–R14 behavior. The online path keeps checking janela/código at agoraMs.\n\nAlso important: don't break existing online tests. In the existing code, janela check uses `agoraMs`; for online path instanteEfetivo === agoraMs, same.\n\nCareful with `lidoMs` invalid date: `new Date(lidoEm).getTime()` → NaN if unparseable. NaN comparisons are false, so janela check `instanteEfetivo < inicio - ... ` false → would pass janela, and codigo check with NaN → codigoEhValido uses NaN floor... Math.floor(NaN) = NaN, codigoDaJanela with NaN → hash of string with \"NaN\" → some code → might equal? Extremely unlikely equality with user-supplied code. But cleaner: if `Number.isNaN(lidoMs)` → 422 DADOS_INVALIDOS. The spec says body 422 DADOS_INVALIDOS for malformed body. I'll add that.\n\nLet me now edit presencas.ts. I need to reconstruct the current code carefully. Current section from line 83-151.\n\nNote the current variable `corpo` is `{ codigo?: unknown }`. I'll change to include lidoEm. Let me edit.",
+     "time": {
+      "start": 1789849977471,
+      "end": 1789849983649
+     },
+     "id": "prt_0bb5f427f0019bnVFmCX63hTmE",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f3bc6001Y8W3cDJTQggxNJ"
+    },
+    {
+     "type": "text",
+     "text": "Vermelho confirmado (422 em vez de 201). Agora o código mínimo para R11 em `src/rotas/presencas.ts`.",
+     "time": {
+      "start": 1789849983653,
+      "end": 1789849986220
+     },
+     "id": "prt_0bb5f5aa5001LafawXrHqndC0U",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f3bc6001Y8W3cDJTQggxNJ"
+    },
+    {
+     "type": "tool",
+     "tool": "edit",
+     "callID": "call_99411ba9c8944606aa18cdab",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts",
+       "oldString": "const encontro = linhaParaObjeto(result[0].columns, result[0].values[0]);\n      const corpo = (req.body ?? {}) as { codigo?: unknown };\n      if (typeof corpo.codigo !== \"string\" || corpo.codigo.length !== 6) {\n        return reply.code(422).send({\n          erro: \"DADOS_INVALIDOS\",\n          mensagem: \"Campo 'codigo' é obrigatório e deve ter 6 caracteres\",\n        });\n      }\n\n      const agoraMs = agoraServidor(app).getTime();",
+       "newString": "const encontro = linhaParaObjeto(result[0].columns, result[0].values[0]);\n      const corpo = (req.body ?? {}) as { codigo?: unknown; lidoEm?: unknown };\n      if (typeof corpo.codigo !== \"string\" || corpo.codigo.length !== 6) {\n        return reply.code(422).send({\n          erro: \"DADOS_INVALIDOS\",\n          mensagem: \"Campo 'codigo' é obrigatório e deve ter 6 caracteres\",\n        });\n      }\n      if (corpo.lidoEm !== undefined && typeof corpo.lidoEm !== \"string\") {\n        return reply.code(422).send({\n          erro: \"DADOS_INVALIDOS\",\n          mensagem: \"Campo 'lidoEm' deve ser uma data ISO 8601\",\n        });\n      }\n\n      const agoraMs = agoraServidor(app).getTime();"
+      },
+      "output": "Edit applied successfully.",
+      "metadata": {
+       "diagnostics": {},
+       "diff": "Index: C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\n===================================================================\n--- C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\n+++ C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\n@@ -80,15 +80,21 @@\n   });\n }\n \n const encontro = linhaParaObjeto(result[0].columns, result[0].values[0]);\n-const corpo = (req.body ?? {}) as { codigo?: unknown };\n+const corpo = (req.body ?? {}) as { codigo?: unknown; lidoEm?: unknown };\n if (typeof corpo.codigo !== \"string\" || corpo.codigo.length !== 6) {\n   return reply.code(422).send({\n     erro: \"DADOS_INVALIDOS\",\n     mensagem: \"Campo 'codigo' é obrigatório e deve ter 6 caracteres\",\n   });\n }\n+if (corpo.lidoEm !== undefined && typeof corpo.lidoEm !== \"string\") {\n+  return reply.code(422).send({\n+    erro: \"DADOS_INVALIDOS\",\n+    mensagem: \"Campo 'lidoEm' deve ser uma data ISO 8601\",\n+  });\n+}\n \n const agoraMs = agoraServidor(app).getTime();\n \n const existente = db.exec(\n",
+       "filediff": {
+        "file": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts",
+        "patch": "Index: C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\n===================================================================\n--- C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\n+++ C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\n@@ -80,15 +80,21 @@\n   });\n }\n \n const encontro = linhaParaObjeto(result[0].columns, result[0].values[0]);\n-const corpo = (req.body ?? {}) as { codigo?: unknown };\n+const corpo = (req.body ?? {}) as { codigo?: unknown; lidoEm?: unknown };\n if (typeof corpo.codigo !== \"string\" || corpo.codigo.length !== 6) {\n   return reply.code(422).send({\n     erro: \"DADOS_INVALIDOS\",\n     mensagem: \"Campo 'codigo' é obrigatório e deve ter 6 caracteres\",\n   });\n }\n+if (corpo.lidoEm !== undefined && typeof corpo.lidoEm !== \"string\") {\n+  return reply.code(422).send({\n+    erro: \"DADOS_INVALIDOS\",\n+    mensagem: \"Campo 'lidoEm' deve ser uma data ISO 8601\",\n+  });\n+}\n \n const agoraMs = agoraServidor(app).getTime();\n \n const existente = db.exec(\n",
+        "additions": 7,
+        "deletions": 1
+       },
+       "truncated": false
+      },
+      "title": "api\\src\\rotas\\presencas.ts",
+      "time": {
+       "start": 1789849986117,
+       "end": 1789849986213
+      }
+     },
+     "id": "prt_0bb5f5b4e0011CWEtK453UpJ42",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f3bc6001Y8W3cDJTQggxNJ"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "1b6451a3caa8e945b192c1e9fcab8bf422f8bfb8",
+     "type": "step-finish",
+     "tokens": {
+      "total": 42596,
+      "input": 594,
+      "output": 1554,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 40448
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5f68dc001s3Sb3SUNj3LGmt",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f3bc6001Y8W3cDJTQggxNJ"
+    },
+    {
+     "type": "patch",
+     "hash": "90c49aa893fb82991575643ace4d7d72bbf1d7e0",
+     "files": [
+      "C:/Users/ferna_fxhnpvd/semana-academica/api/src/rotas/presencas.ts"
+     ],
+     "id": "prt_0bb5f6baa001EsKbGoI759p4I0",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f3bc6001Y8W3cDJTQggxNJ"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 43661,
+     "input": 368,
+     "output": 1053,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 42240
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849988030,
+     "completed": 1789849994711
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5f6bbe0011S1Ly4FicKw6CI",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "1b6451a3caa8e945b192c1e9fcab8bf422f8bfb8",
+     "type": "step-start",
+     "id": "prt_0bb5f7188001z4XeNP9sxLrBWT",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f6bbe0011S1Ly4FicKw6CI"
+    },
+    {
+     "type": "reasoning",
+     "text": "Now modify the janela and codigo checks to use the effective instant, and the insert for offline. Let me edit the section after the inscrito check.",
+     "time": {
+      "start": 1789849989522,
+      "end": 1789849989861
+     },
+     "id": "prt_0bb5f7192001kuIo96m3Pb5m7T",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f6bbe0011S1Ly4FicKw6CI"
+    },
+    {
+     "type": "text",
+     "text": "\n\n",
+     "time": {
+      "start": 1789849989864,
+      "end": 1789849993067
+     },
+     "id": "prt_0bb5f72e8001qoHhMIoOZmgc8Y",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f6bbe0011S1Ly4FicKw6CI"
+    },
+    {
+     "type": "tool",
+     "tool": "edit",
+     "callID": "call_6a69714445694317bdb1ceda",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts",
+       "newString": "const inicio = new Date(encontro.inicio as string).getTime();\n      const fim = new Date(encontro.fim as string).getTime();\n\n      const lidoEm = corpo.lidoEm as string | undefined;\n      const offline = lidoEm !== undefined;\n      const lidoMs = offline ? new Date(lidoEm).getTime() : agoraMs;\n      if (offline && Number.isNaN(lidoMs)) {\n        return reply.code(422).send({\n          erro: \"DADOS_INVALIDOS\",\n          mensagem: \"Campo 'lidoEm' deve ser uma data ISO 8601\",\n        });\n      }\n\n      const instanteEfetivo = offline ? Math.min(lidoMs, agoraMs) : agoraMs;\n\n      if (offline) {\n        const limiteSincronizacao = fim + 2 * 60 * 60 * 1000;\n        if (agoraMs > limiteSincronizacao) {\n          return reply.code(422).send({\n            erro: \"SINCRONIZACAO_TARDIA\",\n            mensagem: \"Envio offline após 2 horas do fim do encontro\",\n          });\n        }\n      }\n\n      if (instanteEfetivo < inicio - MINUTOS_ANTES || instanteEfetivo > inicio + MINUTOS_DEPOIS) {\n        return reply.code(422).send({\n          erro: \"FORA_DA_JANELA\",\n          mensagem: \"Fora da janela de registro de presença\",\n        });\n      }\n\n      if (!codigoEhValido(id, corpo.codigo, instanteEfetivo)) {\n        return reply.code(422).send({\n          erro: \"CODIGO_INVALIDO\",\n          mensagem: \"Código não é válido para este encontro neste momento\",\n        });\n      }\n\n      const idPresenca = novoIdPresenca();\n      const registradaEm = new Date(agoraMs).toISOString();\n      const lidoEmArmazenado = offline ? lidoEm : registradaEm;\n      const origem = offline ? \"qr_offline\" : \"qr\";\n      db.run(\n        `INSERT INTO presencas (id, encontro_id, participante_id, origem, lido_em, registrada_em)\n         VALUES (?, ?, ?, ?, ?, ?)`,\n        [idPresenca, id, usuario.id, origem, lidoEmArmazenado, registradaEm]\n      );\n      salvarBanco(db);\n\n      return reply.code(201).send({\n        id: idPresenca,\n        encontroId: id,\n        participanteId: usuario.id,\n        origem,\n        lidoEm: lidoEmArmazenado,\n        registradaEm,\n        justificativa: null,\n      });\n    }\n  );\n}",
+       "oldString": "const inicio = new Date(encontro.inicio as string).getTime();\n      if (agoraMs < inicio - MINUTOS_ANTES || agoraMs > inicio + MINUTOS_DEPOIS) {\n        return reply.code(422).send({\n          erro: \"FORA_DA_JANELA\",\n          mensagem: \"Fora da janela de registro de presença\",\n        });\n      }\n\n      if (!codigoEhValido(id, corpo.codigo, agoraMs)) {\n        return reply.code(422).send({\n          erro: \"CODIGO_INVALIDO\",\n          mensagem: \"Código não é válido para este encontro neste momento\",\n        });\n      }\n\n      const idPresenca = novoIdPresenca();\n      const registradaEm = new Date(agoraMs).toISOString();\n      db.run(\n        `INSERT INTO presencas (id, encontro_id, participante_id, origem, lido_em, registrada_em)\n         VALUES (?, ?, ?, 'qr', ?, ?)`,\n        [idPresenca, id, usuario.id, registradaEm, registradaEm]\n      );\n      salvarBanco(db);\n\n      return reply.code(201).send({\n        id: idPresenca,\n        encontroId: id,\n        participanteId: usuario.id,\n        origem: \"qr\",\n        lidoEm: registradaEm,\n        registradaEm,\n        justificativa: null,\n      });\n    }\n  );\n}"
+      },
+      "output": "Edit applied successfully.",
+      "metadata": {
+       "diagnostics": {},
+       "diff": "Index: C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\n===================================================================\n--- C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\n+++ C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\n@@ -121,37 +121,63 @@\n     });\n   }\n \n   const inicio = new Date(encontro.inicio as string).getTime();\n-  if (agoraMs < inicio - MINUTOS_ANTES || agoraMs > inicio + MINUTOS_DEPOIS) {\n+  const fim = new Date(encontro.fim as string).getTime();\n+\n+  const lidoEm = corpo.lidoEm as string | undefined;\n+  const offline = lidoEm !== undefined;\n+  const lidoMs = offline ? new Date(lidoEm).getTime() : agoraMs;\n+  if (offline && Number.isNaN(lidoMs)) {\n     return reply.code(422).send({\n+      erro: \"DADOS_INVALIDOS\",\n+      mensagem: \"Campo 'lidoEm' deve ser uma data ISO 8601\",\n+    });\n+  }\n+\n+  const instanteEfetivo = offline ? Math.min(lidoMs, agoraMs) : agoraMs;\n+\n+  if (offline) {\n+    const limiteSincronizacao = fim + 2 * 60 * 60 * 1000;\n+    if (agoraMs > limiteSincronizacao) {\n+      return reply.code(422).send({\n+        erro: \"SINCRONIZACAO_TARDIA\",\n+        mensagem: \"Envio offline após 2 horas do fim do encontro\",\n+      });\n+    }\n+  }\n+\n+  if (instanteEfetivo < inicio - MINUTOS_ANTES || instanteEfetivo > inicio + MINUTOS_DEPOIS) {\n+    return reply.code(422).send({\n       erro: \"FORA_DA_JANELA\",\n       mensagem: \"Fora da janela de registro de presença\",\n     });\n   }\n \n-  if (!codigoEhValido(id, corpo.codigo, agoraMs)) {\n+  if (!codigoEhValido(id, corpo.codigo, instanteEfetivo)) {\n     return reply.code(422).send({\n       erro: \"CODIGO_INVALIDO\",\n       mensagem: \"Código não é válido para este encontro neste momento\",\n     });\n   }\n \n   const idPresenca = novoIdPresenca();\n   const registradaEm = new Date(agoraMs).toISOString();\n+  const lidoEmArmazenado = offline ? lidoEm : registradaEm;\n+  const origem = offline ? \"qr_offline\" : \"qr\";\n   db.run(\n     `INSERT INTO presencas (id, encontro_id, participante_id, origem, lido_em, registrada_em)\n-     VALUES (?, ?, ?, 'qr', ?, ?)`,\n-    [idPresenca, id, usuario.id, registradaEm, registradaEm]\n+     VALUES (?, ?, ?, ?, ?, ?)`,\n+    [idPresenca, id, usuario.id, origem, lidoEmArmazenado, registradaEm]\n   );\n   salvarBanco(db);\n \n   return reply.code(201).send({\n     id: idPresenca,\n     encontroId: id,\n     participanteId: usuario.id,\n-    origem: \"qr\",\n-    lidoEm: registradaEm,\n+    origem,\n+    lidoEm: lidoEmArmazenado,\n     registradaEm,\n     justificativa: null,\n   });\n }\n",
+       "filediff": {
+        "file": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts",
+        "patch": "Index: C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\n===================================================================\n--- C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\n+++ C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\src\\rotas\\presencas.ts\n@@ -121,37 +121,63 @@\n     });\n   }\n \n   const inicio = new Date(encontro.inicio as string).getTime();\n-  if (agoraMs < inicio - MINUTOS_ANTES || agoraMs > inicio + MINUTOS_DEPOIS) {\n+  const fim = new Date(encontro.fim as string).getTime();\n+\n+  const lidoEm = corpo.lidoEm as string | undefined;\n+  const offline = lidoEm !== undefined;\n+  const lidoMs = offline ? new Date(lidoEm).getTime() : agoraMs;\n+  if (offline && Number.isNaN(lidoMs)) {\n     return reply.code(422).send({\n+      erro: \"DADOS_INVALIDOS\",\n+      mensagem: \"Campo 'lidoEm' deve ser uma data ISO 8601\",\n+    });\n+  }\n+\n+  const instanteEfetivo = offline ? Math.min(lidoMs, agoraMs) : agoraMs;\n+\n+  if (offline) {\n+    const limiteSincronizacao = fim + 2 * 60 * 60 * 1000;\n+    if (agoraMs > limiteSincronizacao) {\n+      return reply.code(422).send({\n+        erro: \"SINCRONIZACAO_TARDIA\",\n+        mensagem: \"Envio offline após 2 horas do fim do encontro\",\n+      });\n+    }\n+  }\n+\n+  if (instanteEfetivo < inicio - MINUTOS_ANTES || instanteEfetivo > inicio + MINUTOS_DEPOIS) {\n+    return reply.code(422).send({\n       erro: \"FORA_DA_JANELA\",\n       mensagem: \"Fora da janela de registro de presença\",\n     });\n   }\n \n-  if (!codigoEhValido(id, corpo.codigo, agoraMs)) {\n+  if (!codigoEhValido(id, corpo.codigo, instanteEfetivo)) {\n     return reply.code(422).send({\n       erro: \"CODIGO_INVALIDO\",\n       mensagem: \"Código não é válido para este encontro neste momento\",\n     });\n   }\n \n   const idPresenca = novoIdPresenca();\n   const registradaEm = new Date(agoraMs).toISOString();\n+  const lidoEmArmazenado = offline ? lidoEm : registradaEm;\n+  const origem = offline ? \"qr_offline\" : \"qr\";\n   db.run(\n     `INSERT INTO presencas (id, encontro_id, participante_id, origem, lido_em, registrada_em)\n-     VALUES (?, ?, ?, 'qr', ?, ?)`,\n-    [idPresenca, id, usuario.id, registradaEm, registradaEm]\n+     VALUES (?, ?, ?, ?, ?, ?)`,\n+    [idPresenca, id, usuario.id, origem, lidoEmArmazenado, registradaEm]\n   );\n   salvarBanco(db);\n \n   return reply.code(201).send({\n     id: idPresenca,\n     encontroId: id,\n     participanteId: usuario.id,\n-    origem: \"qr\",\n-    lidoEm: registradaEm,\n+    origem,\n+    lidoEm: lidoEmArmazenado,\n     registradaEm,\n     justificativa: null,\n   });\n }\n",
+        "additions": 32,
+        "deletions": 6
+       },
+       "truncated": false
+      },
+      "title": "api\\src\\rotas\\presencas.ts",
+      "time": {
+       "start": 1789849992999,
+       "end": 1789849993061
+      }
+     },
+     "id": "prt_0bb5f72ed001TM5QU45MNwhuL7",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f6bbe0011S1Ly4FicKw6CI"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "3c57618f7a89dbf52328e4fde575c77d73bed631",
+     "type": "step-finish",
+     "tokens": {
+      "total": 43661,
+      "input": 368,
+      "output": 1053,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 42240
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5f832c0011c4uB6eg4Lbi3T",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f6bbe0011S1Ly4FicKw6CI"
+    },
+    {
+     "type": "patch",
+     "hash": "1b6451a3caa8e945b192c1e9fcab8bf422f8bfb8",
+     "files": [
+      "C:/Users/ferna_fxhnpvd/semana-academica/api/src/rotas/presencas.ts"
+     ],
+     "id": "prt_0bb5f85d200133UwocDoJr2QT2",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f6bbe0011S1Ly4FicKw6CI"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 43773,
+     "input": 1177,
+     "output": 100,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 42496
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789849994727,
+     "completed": 1789850004635
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5f85e7001aQkOjpqdl90G9o",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "3c57618f7a89dbf52328e4fde575c77d73bed631",
+     "type": "step-start",
+     "id": "prt_0bb5f8f3b0017CeZMNlD7Av05Y",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f85e7001aQkOjpqdl90G9o"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_97a2c025436e4e228042b652",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "npx tsx --test verificacoes/presencas-offline.spec.ts 2>&1",
+       "workdir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api"
+      },
+      "output": "▶ M3 Fatia 3 - Presença offline (lidoEm)\n  ✔ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (141.8512ms)\n✔ M3 Fatia 3 - Presença offline (lidoEm) (278.634ms)\nℹ tests 1\nℹ suites 1\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1623.0382\n",
+      "metadata": {
+       "output": "▶ M3 Fatia 3 - Presença offline (lidoEm)\n  ✔ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (141.8512ms)\n✔ M3 Fatia 3 - Presença offline (lidoEm) (278.634ms)\nℹ tests 1\nℹ suites 1\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1623.0382\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "npx tsx --test verificacoes/presencas-offline.spec.ts 2>&1",
+      "time": {
+       "start": 1789849997356,
+       "end": 1789850003707
+      }
+     },
+     "id": "prt_0bb5f8f740016sBaB5hQzDHpl6",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f85e7001aQkOjpqdl90G9o"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "3c57618f7a89dbf52328e4fde575c77d73bed631",
+     "type": "step-finish",
+     "tokens": {
+      "total": 43773,
+      "input": 1177,
+      "output": 100,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 42496
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5faad8001AG4ppQbvyAQh51",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5f85e7001aQkOjpqdl90G9o"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 44043,
+     "input": 406,
+     "output": 117,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 43520
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789850004645,
+     "completed": 1789850013851
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5faca5001AozdvDTql3EuRh",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "3c57618f7a89dbf52328e4fde575c77d73bed631",
+     "type": "step-start",
+     "id": "prt_0bb5fb4ec001NuF8e1BF4aBV0H",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5faca5001AozdvDTql3EuRh"
+    },
+    {
+     "type": "reasoning",
+     "text": "Green. Now run the whole suite to confirm nothing broke.",
+     "time": {
+      "start": 1789850006768,
+      "end": 1789850006781
+     },
+     "id": "prt_0bb5fb4f0001vWfk4DwrkEYQcd",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5faca5001AozdvDTql3EuRh"
+    },
+    {
+     "type": "text",
+     "text": "Verde no teste 1. Verifico a suíte inteira antes da próxima fatia.",
+     "time": {
+      "start": 1789850006784,
+      "end": 1789850007225
+     },
+     "id": "prt_0bb5fb500001626KQgXz5bMR5j",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5faca5001AozdvDTql3EuRh"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_e108034222fc47fca59004b9",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "npm test 2>&1",
+       "workdir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api"
+      },
+      "output": "\n> semana-academica-api@1.0.0 test\n> tsx --test verificacoes/*.spec.ts\n\n▶ M3 Fatia 1 - Código do encontro\n  ✔ R4 - consultas na mesma janela devolvem o mesmo código; na janela seguinte, outro (197.1122ms)\n  ✔ R3 - relógio em 10:15:30: trocaEm=10:16:00 e validoAte=10:17:00 (71.2286ms)\n  ✔ R2 - encontro de atividade cancelada (relógio dentro da janela) retorna 422 ATIVIDADE_CANCELADA (76.2748ms)\n  ✔ R1 - fora da janela 16 min antes do início retorna 422 FORA_DA_JANELA (37.0211ms)\n  ✔ R1 - fora da janela 31 min após o início retorna 422 FORA_DA_JANELA (23.8086ms)\n  ✔ R1 - bordas da janela de obtenção: início - 15 min e início + 30 min retornam 200 (31.3196ms)\n✔ M3 Fatia 1 - Código do encontro (609.9696ms)\n▶ Modo de teste - infraestrutura\n  ✔ POST /_teste/reset retorna 204 (121.1326ms)\n  ✔ após reset, GET /_teste/relogio retorna o relógio inicial 2026-10-13T09:00:00-03:00 (31.7197ms)\n  ✔ após reset, dados iniciais de usuários são carregados (27.3477ms)\n  ✔ após reset, dados iniciais de salas são carregados (30.9801ms)\n  ✔ sem MODO_TESTE, rotas /_teste/* retornam 404 (104.8989ms)\n✔ Modo de teste - infraestrutura (497.136ms)\n▶ M3 Fatia 3 - Presença offline (lidoEm)\n  ✔ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (190.4359ms)\n✔ M3 Fatia 3 - Presença offline (lidoEm) (377.3607ms)\n▶ M3 Fatia 2 - Presença online básica\n  ✔ R8 - POST sem lidoEm de inscrito confirmado retorna 201 com origem='qr' e lidoEm=registradaEm=relógio (220.7545ms)\n  ✔ R7 - POST de participante com inscrição em_espera retorna 403 NAO_INSCRITO (63.801ms)\n  ✔ R6 - POST com relógio fora de [inicio-15, inicio+30] retorna 422 FORA_DA_JANELA (51.4521ms)\n  ✔ R6 - POST com relógio em inicio+30 min:00 (borda) retorna 201 (33.8208ms)\n  ✔ R9 - POST com código que nunca foi gerado retorna 422 CODIGO_INVALIDO (25.3591ms)\n  ✔ R14 - POST com o código da janela anterior (dentro da janela de presença) retorna 201 (31.542ms)\n  ✔ R12 - segundo POST do mesmo participante/encontro retorna 200 mantendo lidoEm/registradaEm/origem (30.3509ms)\n  ✔ R9 - POST com código já expirado (fora das janelas atual e anterior) retorna 422 CODIGO_INVALIDO (29.1279ms)\n  ✔ R5 - validade do código é restrita ao par (encontro, janela): código de outro encontro é rejeitado (39.02ms)\n✔ M3 Fatia 2 - Presença online básica (714.6123ms)\nℹ tests 21\nℹ suites 4\nℹ pass 21\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 2131.4416\n",
+      "metadata": {
+       "output": "\n> semana-academica-api@1.0.0 test\n> tsx --test verificacoes/*.spec.ts\n\n▶ M3 Fatia 1 - Código do encontro\n  ✔ R4 - consultas na mesma janela devolvem o mesmo código; na janela seguinte, outro (197.1122ms)\n  ✔ R3 - relógio em 10:15:30: trocaEm=10:16:00 e validoAte=10:17:00 (71.2286ms)\n  ✔ R2 - encontro de atividade cancelada (relógio dentro da janela) retorna 422 ATIVIDADE_CANCELADA (76.2748ms)\n  ✔ R1 - fora da janela 16 min antes do início retorna 422 FORA_DA_JANELA (37.0211ms)\n  ✔ R1 - fora da janela 31 min após o início retorna 422 FORA_DA_JANELA (23.8086ms)\n  ✔ R1 - bordas da janela de obtenção: início - 15 min e início + 30 min retornam 200 (31.3196ms)\n✔ M3 Fatia 1 - Código do encontro (609.9696ms)\n▶ Modo de teste - infraestrutura\n  ✔ POST /_teste/reset retorna 204 (121.1326ms)\n  ✔ após reset, GET /_teste/relogio retorna o relógio inicial 2026-10-13T09:00:00-03:00 (31.7197ms)\n  ✔ após reset, dados iniciais de usuários são carregados (27.3477ms)\n  ✔ após reset, dados iniciais de salas são carregados (30.9801ms)\n  ✔ sem MODO_TESTE, rotas /_teste/* retornam 404 (104.8989ms)\n✔ Modo de teste - infraestrutura (497.136ms)\n▶ M3 Fatia 3 - Presença offline (lidoEm)\n  ✔ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (190.4359ms)\n✔ M3 Fatia 3 - Presença offline (lidoEm) (377.3607ms)\n▶ M3 Fatia 2 - Presença online básica\n  ✔ R8 - POST sem lidoEm de inscrito confirmado retorna 201 com origem='qr' e lidoEm=registradaEm=relógio (220.7545ms)\n  ✔ R7 - POST de participante com inscrição em_espera retorna 403 NAO_INSCRITO (63.801ms)\n  ✔ R6 - POST com relógio fora de [inicio-15, inicio+30] retorna 422 FORA_DA_JANELA (51.4521ms)\n  ✔ R6 - POST com relógio em inicio+30 min:00 (borda) retorna 201 (33.8208ms)\n  ✔ R9 - POST com código que nunca foi gerado retorna 422 CODIGO_INVALIDO (25.3591ms)\n  ✔ R14 - POST com o código da janela anterior (dentro da janela de presença) retorna 201 (31.542ms)\n  ✔ R12 - segundo POST do mesmo participante/encontro retorna 200 mantendo lidoEm/registradaEm/origem (30.3509ms)\n  ✔ R9 - POST com código já expirado (fora das janelas atual e anterior) retorna 422 CODIGO_INVALIDO (29.1279ms)\n  ✔ R5 - validade do código é restrita ao par (encontro, janela): código de outro encontro é rejeitado (39.02ms)\n✔ M3 Fatia 2 - Presença online básica (714.6123ms)\nℹ tests 21\nℹ suites 4\nℹ pass 21\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 2131.4416\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "npm test 2>&1",
+      "time": {
+       "start": 1789850007216,
+       "end": 1789850012852
+      }
+     },
+     "id": "prt_0bb5fb5c0001H1ZXwCAiTBrgrj",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5faca5001AozdvDTql3EuRh"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "3c57618f7a89dbf52328e4fde575c77d73bed631",
+     "type": "step-finish",
+     "tokens": {
+      "total": 44043,
+      "input": 406,
+      "output": 117,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 43520
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5fce9d001y6qRJ6O0PigRU1",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5faca5001AozdvDTql3EuRh"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 45466,
+     "input": 965,
+     "output": 469,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 44032
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789850013861,
+     "completed": 1789850018660
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5fd0a5001HukMNZdIfzeVep",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "3c57618f7a89dbf52328e4fde575c77d73bed631",
+     "type": "step-start",
+     "id": "prt_0bb5fd751001i2Vnjf2q2ZqKCQ",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5fd0a5001HukMNZdIfzeVep"
+    },
+    {
+     "type": "text",
+     "text": "Suíte verde (21/21). **Teste 2** (prova R11/AC18): `lidoEm` dentro da janela, mas envio após 2h do `fim` → `SINCRONIZACAO_TARDIA`.",
+     "time": {
+      "start": 1789850015611,
+      "end": 1789850016946
+     },
+     "id": "prt_0bb5fd77b001Xo3ZIfe8ibGgs8",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5fd0a5001HukMNZdIfzeVep"
+    },
+    {
+     "type": "tool",
+     "tool": "edit",
+     "callID": "call_2a73c03544d649e9b2c7d8d8",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts",
+       "oldString": "assert.equal(body.justificativa, null);\n  });\n});",
+       "newString": "assert.equal(body.justificativa, null);\n  });\n\n  it(\"R11 - POST com lidoEm dentro da janela, mas envio após 2h do fim do encontro retorna 422 SINCRONIZACAO_TARDIA\", async () => {\n    await resetar(\"2026-10-19T10:15:30-03:00\", {\n      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n    });\n\n    const codigo = await obterCodigo();\n\n    await fetchJson(\"/_teste/relogio\", {\n      method: \"PUT\",\n      body: JSON.stringify({ agora: \"2026-10-19T13:00:01-03:00\" }),\n    });\n\n    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n      method: \"POST\",\n      headers: { \"X-Usuario\": \"p-carla\" },\n      body: JSON.stringify({ codigo, lidoEm: \"2026-10-19T10:15:30-03:00\" }),\n    });\n    assert.equal(r.status, 422);\n    assert.equal((r.body as { erro: string }).erro, \"SINCRONIZACAO_TARDIA\");\n  });\n});"
+      },
+      "output": "Edit applied successfully.",
+      "metadata": {
+       "diagnostics": {},
+       "diff": "Index: C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\n===================================================================\n--- C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\n+++ C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\n@@ -114,5 +114,26 @@\n       new Date(\"2026-10-19T12:00:00-03:00\").toISOString()\n     );\n     assert.equal(body.justificativa, null);\n   });\n+\n+  it(\"R11 - POST com lidoEm dentro da janela, mas envio após 2h do fim do encontro retorna 422 SINCRONIZACAO_TARDIA\", async () => {\n+    await resetar(\"2026-10-19T10:15:30-03:00\", {\n+      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n+    });\n+\n+    const codigo = await obterCodigo();\n+\n+    await fetchJson(\"/_teste/relogio\", {\n+      method: \"PUT\",\n+      body: JSON.stringify({ agora: \"2026-10-19T13:00:01-03:00\" }),\n+    });\n+\n+    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n+      method: \"POST\",\n+      headers: { \"X-Usuario\": \"p-carla\" },\n+      body: JSON.stringify({ codigo, lidoEm: \"2026-10-19T10:15:30-03:00\" }),\n+    });\n+    assert.equal(r.status, 422);\n+    assert.equal((r.body as { erro: string }).erro, \"SINCRONIZACAO_TARDIA\");\n+  });\n });\n\\ No newline at end of file\n",
+       "filediff": {
+        "file": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts",
+        "patch": "Index: C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\n===================================================================\n--- C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\n+++ C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\n@@ -114,5 +114,26 @@\n       new Date(\"2026-10-19T12:00:00-03:00\").toISOString()\n     );\n     assert.equal(body.justificativa, null);\n   });\n+\n+  it(\"R11 - POST com lidoEm dentro da janela, mas envio após 2h do fim do encontro retorna 422 SINCRONIZACAO_TARDIA\", async () => {\n+    await resetar(\"2026-10-19T10:15:30-03:00\", {\n+      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n+    });\n+\n+    const codigo = await obterCodigo();\n+\n+    await fetchJson(\"/_teste/relogio\", {\n+      method: \"PUT\",\n+      body: JSON.stringify({ agora: \"2026-10-19T13:00:01-03:00\" }),\n+    });\n+\n+    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n+      method: \"POST\",\n+      headers: { \"X-Usuario\": \"p-carla\" },\n+      body: JSON.stringify({ codigo, lidoEm: \"2026-10-19T10:15:30-03:00\" }),\n+    });\n+    assert.equal(r.status, 422);\n+    assert.equal((r.body as { erro: string }).erro, \"SINCRONIZACAO_TARDIA\");\n+  });\n });\n\\ No newline at end of file\n",
+        "additions": 21,
+        "deletions": 0
+       },
+       "truncated": false
+      },
+      "title": "api\\verificacoes\\presencas-offline.spec.ts",
+      "time": {
+       "start": 1789850016876,
+       "end": 1789850016916
+      }
+     },
+     "id": "prt_0bb5fd87b0019yCIMBHCzlQMDd",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5fd0a5001HukMNZdIfzeVep"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "1b97ae8ef555c21a87ce7b550b5e802f5544d7c0",
+     "type": "step-finish",
+     "tokens": {
+      "total": 45466,
+      "input": 965,
+      "output": 469,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 44032
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb5fe0a8001CgaqxghXvswRQb",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5fd0a5001HukMNZdIfzeVep"
+    },
+    {
+     "type": "patch",
+     "hash": "3c57618f7a89dbf52328e4fde575c77d73bed631",
+     "files": [
+      "C:/Users/ferna_fxhnpvd/semana-academica/api/verificacoes/presencas-offline.spec.ts"
+     ],
+     "id": "prt_0bb5fe35e0019eu914u2Y0ejs1",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5fd0a5001HukMNZdIfzeVep"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 45578,
+     "input": 422,
+     "output": 100,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 45056
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789850018669,
+     "completed": 1789850027762
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb5fe36d001jcIOlY7D475wre",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "1b97ae8ef555c21a87ce7b550b5e802f5544d7c0",
+     "type": "step-start",
+     "id": "prt_0bb5fe8d7001UV9GfmmcYBvOC7",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5fe36d001jcIOlY7D475wre"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_a364838c8b3448b2adbb0b8d",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "npx tsx --test verificacoes/presencas-offline.spec.ts 2>&1",
+       "workdir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api"
+      },
+      "output": "▶ M3 Fatia 3 - Presença offline (lidoEm)\n  ✔ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (143.408ms)\n  ✔ R11 - POST com lidoEm dentro da janela, mas envio após 2h do fim do encontro retorna 422 SINCRONIZACAO_TARDIA (41.5163ms)\n✔ M3 Fatia 3 - Presença offline (lidoEm) (318.3728ms)\nℹ tests 2\nℹ suites 1\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1631.5299\n",
+      "metadata": {
+       "output": "▶ M3 Fatia 3 - Presença offline (lidoEm)\n  ✔ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (143.408ms)\n  ✔ R11 - POST com lidoEm dentro da janela, mas envio após 2h do fim do encontro retorna 422 SINCRONIZACAO_TARDIA (41.5163ms)\n✔ M3 Fatia 3 - Presença offline (lidoEm) (318.3728ms)\nℹ tests 2\nℹ suites 1\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1631.5299\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "npx tsx --test verificacoes/presencas-offline.spec.ts 2>&1",
+      "time": {
+       "start": 1789850020291,
+       "end": 1789850026782
+      }
+     },
+     "id": "prt_0bb5fe929001QIxj44vREsuA5l",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5fe36d001jcIOlY7D475wre"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "1b97ae8ef555c21a87ce7b550b5e802f5544d7c0",
+     "type": "step-finish",
+     "tokens": {
+      "total": 45578,
+      "input": 422,
+      "output": 100,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 45056
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb600511001QFhT0deWj94s37",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb5fe36d001jcIOlY7D475wre"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 46759,
+     "input": 210,
+     "output": 981,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 45568
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789850027776,
+     "completed": 1789850035775
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb600700001DRr332Xbj6YsXA",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "1b97ae8ef555c21a87ce7b550b5e802f5544d7c0",
+     "type": "step-start",
+     "id": "prt_0bb600d48001R22qKQuAMoLJO9",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb600700001DRr332Xbj6YsXA"
+    },
+    {
+     "type": "reasoning",
+     "text": "This test passed already with the existing implementation (the sync check was added for test 1). That's fine — it's green from the FATIA implementation. But per TDD discipline, this test wasn't \"red first\" strictly... Actually it would have been red BEFORE I implemented the code (the code was written for test 1). Let me verify it's actually testing correctly — it passed, which is right. The TDD skill says a test must fail before code exists. Since the code now exists, this test passes immediately. That's acceptable — it was written after the implementation for test 1 but it validates behavior. However, to be strict, I could have written test 2 first and watched it fail before implementing. The skill emphasizes each test failing first. But the implementation for R11 inherently covers all three scenarios, so they pass together. This is a natural consequence of implementing the slice's rule. The important point: the test asserts real spec values, and it's green because the rule works, not because I fudged it.\n\nActually, let me double check that this test would NOT pass against the original code (before R11 impl). With original code: lidoEm ignored; agora = 13:00:01; janela check agora > inicio+30 (10:30) → FORA_DA_JANELA 422. So it would fail (erro mismatch: FORA_DA_JANELA vs SINCRONIZACAO_TARDIA). So the test is meaningful. Good.\n\nNow test 3 (AC19): lidoEm posterior ao envio → janela e código verificados pelo instante do envio.",
+     "time": {
+      "start": 1789850029441,
+      "end": 1789850032010
+     },
+     "id": "prt_0bb600d81001qnDo7j6WlOOHWL",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb600700001DRr332Xbj6YsXA"
+    },
+    {
+     "type": "text",
+     "text": "Verde (a regra implementada no teste 1 já cobre o cenário; contra o código antigo ele falharia com `FORA_DA_JANELA` em vez de `SINCRONIZACAO_TARDIA`). **Teste 3** (prova R11/AC19): `lidoEm` posterior ao envio → validação pelo instante do envio.",
+     "time": {
+      "start": 1789850032015,
+      "end": 1789850033981
+     },
+     "id": "prt_0bb60178f001hMz5MU3LhxiVGm",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb600700001DRr332Xbj6YsXA"
+    },
+    {
+     "type": "tool",
+     "tool": "edit",
+     "callID": "call_cf1d8412064e4236be3ebf63",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts",
+       "newString": "assert.equal(r.status, 422);\n    assert.equal((r.body as { erro: string }).erro, \"SINCRONIZACAO_TARDIA\");\n  });\n\n  it(\"R11 - POST com lidoEm posterior ao envio valida janela e código pelo instante do envio\", async () => {\n    await resetar(\"2026-10-19T10:15:30-03:00\", {\n      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n    });\n\n    const codigo = await obterCodigo();\n\n    await fetchJson(\"/_teste/relogio\", {\n      method: \"PUT\",\n      body: JSON.stringify({ agora: \"2026-10-19T10:16:30-03:00\" }),\n    });\n\n    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n      method: \"POST\",\n      headers: { \"X-Usuario\": \"p-carla\" },\n      body: JSON.stringify({ codigo, lidoEm: \"2026-10-19T10:18:00-03:00\" }),\n    });\n    assert.equal(r.status, 201);\n    const body = r.body as {\n      origem: string;\n      lidoEm: string;\n      registradaEm: string;\n    };\n    assert.equal(body.origem, \"qr_offline\");\n    assert.equal(\n      new Date(body.lidoEm).toISOString(),\n      new Date(\"2026-10-19T10:18:00-03:00\").toISOString()\n    );\n    assert.equal(\n      new Date(body.registradaEm).toISOString(),\n      new Date(\"2026-10-19T10:16:30-03:00\").toISOString()\n    );\n  });\n});",
+       "oldString": "assert.equal(r.status, 422);\n    assert.equal((r.body as { erro: string }).erro, \"SINCRONIZACAO_TARDIA\");\n  });\n});"
+      },
+      "output": "Edit applied successfully.",
+      "metadata": {
+       "diagnostics": {},
+       "diff": "Index: C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\n===================================================================\n--- C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\n+++ C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\n@@ -135,5 +135,39 @@\n     });\n     assert.equal(r.status, 422);\n     assert.equal((r.body as { erro: string }).erro, \"SINCRONIZACAO_TARDIA\");\n   });\n+\n+  it(\"R11 - POST com lidoEm posterior ao envio valida janela e código pelo instante do envio\", async () => {\n+    await resetar(\"2026-10-19T10:15:30-03:00\", {\n+      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n+    });\n+\n+    const codigo = await obterCodigo();\n+\n+    await fetchJson(\"/_teste/relogio\", {\n+      method: \"PUT\",\n+      body: JSON.stringify({ agora: \"2026-10-19T10:16:30-03:00\" }),\n+    });\n+\n+    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n+      method: \"POST\",\n+      headers: { \"X-Usuario\": \"p-carla\" },\n+      body: JSON.stringify({ codigo, lidoEm: \"2026-10-19T10:18:00-03:00\" }),\n+    });\n+    assert.equal(r.status, 201);\n+    const body = r.body as {\n+      origem: string;\n+      lidoEm: string;\n+      registradaEm: string;\n+    };\n+    assert.equal(body.origem, \"qr_offline\");\n+    assert.equal(\n+      new Date(body.lidoEm).toISOString(),\n+      new Date(\"2026-10-19T10:18:00-03:00\").toISOString()\n+    );\n+    assert.equal(\n+      new Date(body.registradaEm).toISOString(),\n+      new Date(\"2026-10-19T10:16:30-03:00\").toISOString()\n+    );\n+  });\n });\n\\ No newline at end of file\n",
+       "filediff": {
+        "file": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts",
+        "patch": "Index: C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\n===================================================================\n--- C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\n+++ C:\\Users\\ferna_fxhnpvd\\semana-academica\\api\\verificacoes\\presencas-offline.spec.ts\n@@ -135,5 +135,39 @@\n     });\n     assert.equal(r.status, 422);\n     assert.equal((r.body as { erro: string }).erro, \"SINCRONIZACAO_TARDIA\");\n   });\n+\n+  it(\"R11 - POST com lidoEm posterior ao envio valida janela e código pelo instante do envio\", async () => {\n+    await resetar(\"2026-10-19T10:15:30-03:00\", {\n+      inscricoes: [{ participanteId: \"p-carla\", status: \"confirmada\" }],\n+    });\n+\n+    const codigo = await obterCodigo();\n+\n+    await fetchJson(\"/_teste/relogio\", {\n+      method: \"PUT\",\n+      body: JSON.stringify({ agora: \"2026-10-19T10:16:30-03:00\" }),\n+    });\n+\n+    const r = await fetchJson(\"/encontros/enc_5e6f7a8b/presencas\", {\n+      method: \"POST\",\n+      headers: { \"X-Usuario\": \"p-carla\" },\n+      body: JSON.stringify({ codigo, lidoEm: \"2026-10-19T10:18:00-03:00\" }),\n+    });\n+    assert.equal(r.status, 201);\n+    const body = r.body as {\n+      origem: string;\n+      lidoEm: string;\n+      registradaEm: string;\n+    };\n+    assert.equal(body.origem, \"qr_offline\");\n+    assert.equal(\n+      new Date(body.lidoEm).toISOString(),\n+      new Date(\"2026-10-19T10:18:00-03:00\").toISOString()\n+    );\n+    assert.equal(\n+      new Date(body.registradaEm).toISOString(),\n+      new Date(\"2026-10-19T10:16:30-03:00\").toISOString()\n+    );\n+  });\n });\n\\ No newline at end of file\n",
+        "additions": 34,
+        "deletions": 0
+       },
+       "truncated": false
+      },
+      "title": "api\\verificacoes\\presencas-offline.spec.ts",
+      "time": {
+       "start": 1789850033953,
+       "end": 1789850033975
+      }
+     },
+     "id": "prt_0bb6019310012I7tgn9nUlXeaN",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb600700001DRr332Xbj6YsXA"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "d93aab946d3576adee460a55ba51271d5ffc8cbd",
+     "type": "step-finish",
+     "tokens": {
+      "total": 46759,
+      "input": 210,
+      "output": 981,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 45568
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb60235d001KkEJr10n8Eecjt",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb600700001DRr332Xbj6YsXA"
+    },
+    {
+     "type": "patch",
+     "hash": "1b97ae8ef555c21a87ce7b550b5e802f5544d7c0",
+     "files": [
+      "C:/Users/ferna_fxhnpvd/semana-academica/api/verificacoes/presencas-offline.spec.ts"
+     ],
+     "id": "prt_0bb6026380011loIPFPOBowvCm",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb600700001DRr332Xbj6YsXA"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 46871,
+     "input": 691,
+     "output": 100,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 46080
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789850035785,
+     "completed": 1789850046441
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb602649001KDFA43xrQstnVG",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "d93aab946d3576adee460a55ba51271d5ffc8cbd",
+     "type": "step-start",
+     "id": "prt_0bb602e77001IE6f9H4FYwZRmZ",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb602649001KDFA43xrQstnVG"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_d6b6d5d2d7804c66a3a76444",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "npx tsx --test verificacoes/presencas-offline.spec.ts 2>&1",
+       "workdir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api"
+      },
+      "output": "▶ M3 Fatia 3 - Presença offline (lidoEm)\n  ✔ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (160.0473ms)\n  ✔ R11 - POST com lidoEm dentro da janela, mas envio após 2h do fim do encontro retorna 422 SINCRONIZACAO_TARDIA (40.7418ms)\n  ✔ R11 - POST com lidoEm posterior ao envio valida janela e código pelo instante do envio (41.8045ms)\n✔ M3 Fatia 3 - Presença offline (lidoEm) (382.0839ms)\nℹ tests 3\nℹ suites 1\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1753.87\n",
+      "metadata": {
+       "output": "▶ M3 Fatia 3 - Presença offline (lidoEm)\n  ✔ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (160.0473ms)\n  ✔ R11 - POST com lidoEm dentro da janela, mas envio após 2h do fim do encontro retorna 422 SINCRONIZACAO_TARDIA (40.7418ms)\n  ✔ R11 - POST com lidoEm posterior ao envio valida janela e código pelo instante do envio (41.8045ms)\n✔ M3 Fatia 3 - Presença offline (lidoEm) (382.0839ms)\nℹ tests 3\nℹ suites 1\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1753.87\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "npx tsx --test verificacoes/presencas-offline.spec.ts 2>&1",
+      "time": {
+       "start": 1789850038815,
+       "end": 1789850045495
+      }
+     },
+     "id": "prt_0bb6030590014oCOP553RA6rKd",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb602649001KDFA43xrQstnVG"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "d93aab946d3576adee460a55ba51271d5ffc8cbd",
+     "type": "step-finish",
+     "tokens": {
+      "total": 46871,
+      "input": 691,
+      "output": 100,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 46080
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb604dfd001TuMsOTy9APwPay",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb602649001KDFA43xrQstnVG"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 47358,
+     "input": 256,
+     "output": 254,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 46848
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789850046450,
+     "completed": 1789850057776
+    },
+    "finish": "tool-calls",
+    "id": "msg_0bb604ff2001kBw7e70eA5SPDC",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "d93aab946d3576adee460a55ba51271d5ffc8cbd",
+     "type": "step-start",
+     "id": "prt_0bb605688001kSoPoIHP6kWIAy",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb604ff2001kBw7e70eA5SPDC"
+    },
+    {
+     "type": "reasoning",
+     "text": "All 3 yellow-green. Now let me run the full suite, and also run the build (typecheck). The fatia 3 is complete (R11: verificação por lidoEm, lidoEm futuro → vale o envio, SINCRONIZACAO_TARDIA após 2h do fim, origem=\"qr_offline\").\n\nLet me run full suite + build.",
+     "time": {
+      "start": 1789850048191,
+      "end": 1789850049345
+     },
+     "id": "prt_0bb6056bf001wPCn33nOMAp1LD",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb604ff2001kBw7e70eA5SPDC"
+    },
+    {
+     "type": "text",
+     "text": "Verde nos 3 testes. Rodo a suíte inteira e o typecheck.\n\n",
+     "time": {
+      "start": 1789850049349,
+      "end": 1789850050060
+     },
+     "id": "prt_0bb605b45001Wpw3GPhFhrNd1P",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb604ff2001kBw7e70eA5SPDC"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_35494c0d2b96495ea66a726d",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "npm test 2>&1",
+       "workdir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api"
+      },
+      "output": "\n> semana-academica-api@1.0.0 test\n> tsx --test verificacoes/*.spec.ts\n\n▶ M3 Fatia 1 - Código do encontro\n  ✔ R4 - consultas na mesma janela devolvem o mesmo código; na janela seguinte, outro (204.4595ms)\n  ✔ R3 - relógio em 10:15:30: trocaEm=10:16:00 e validoAte=10:17:00 (49.8422ms)\n  ✔ R2 - encontro de atividade cancelada (relógio dentro da janela) retorna 422 ATIVIDADE_CANCELADA (44.8165ms)\n  ✔ R1 - fora da janela 16 min antes do início retorna 422 FORA_DA_JANELA (45.8274ms)\n  ✔ R1 - fora da janela 31 min após o início retorna 422 FORA_DA_JANELA (36.4845ms)\n  ✔ R1 - bordas da janela de obtenção: início - 15 min e início + 30 min retornam 200 (44.6154ms)\n✔ M3 Fatia 1 - Código do encontro (620.8803ms)\n▶ Modo de teste - infraestrutura\n  ✔ POST /_teste/reset retorna 204 (149.0805ms)\n  ✔ após reset, GET /_teste/relogio retorna o relógio inicial 2026-10-13T09:00:00-03:00 (40.2547ms)\n  ✔ após reset, dados iniciais de usuários são carregados (32.6701ms)\n  ✔ após reset, dados iniciais de salas são carregados (33.4353ms)\n  ✔ sem MODO_TESTE, rotas /_teste/* retornam 404 (107.9384ms)\n✔ Modo de teste - infraestrutura (555.5671ms)\n▶ M3 Fatia 3 - Presença offline (lidoEm)\n  ✔ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (200.5116ms)\n  ✔ R11 - POST com lidoEm dentro da janela, mas envio após 2h do fim do encontro retorna 422 SINCRONIZACAO_TARDIA (79.8147ms)\n  ✔ R11 - POST com lidoEm posterior ao envio valida janela e código pelo instante do envio (70.9703ms)\n✔ M3 Fatia 3 - Presença offline (lidoEm) (560.531ms)\n▶ M3 Fatia 2 - Presença online básica\n  ✔ R8 - POST sem lidoEm de inscrito confirmado retorna 201 com origem='qr' e lidoEm=registradaEm=relógio (202.145ms)\n  ✔ R7 - POST de participante com inscrição em_espera retorna 403 NAO_INSCRITO (60.1648ms)\n  ✔ R6 - POST com relógio fora de [inicio-15, inicio+30] retorna 422 FORA_DA_JANELA (67.3152ms)\n  ✔ R6 - POST com relógio em inicio+30 min:00 (borda) retorna 201 (54.7518ms)\n  ✔ R9 - POST com código que nunca foi gerado retorna 422 CODIGO_INVALIDO (32.0255ms)\n  ✔ R14 - POST com o código da janela anterior (dentro da janela de presença) retorna 201 (87.9161ms)\n  ✔ R12 - segundo POST do mesmo participante/encontro retorna 200 mantendo lidoEm/registradaEm/origem (35.5338ms)\n  ✔ R9 - POST com código já expirado (fora das janelas atual e anterior) retorna 422 CODIGO_INVALIDO (32.8607ms)\n  ✔ R5 - validade do código é restrita ao par (encontro, janela): código de outro encontro é rejeitado (40.642ms)\n✔ M3 Fatia 2 - Presença online básica (814.5075ms)\nℹ tests 23\nℹ suites 4\nℹ pass 23\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 2320.9776\n",
+      "metadata": {
+       "output": "\n> semana-academica-api@1.0.0 test\n> tsx --test verificacoes/*.spec.ts\n\n▶ M3 Fatia 1 - Código do encontro\n  ✔ R4 - consultas na mesma janela devolvem o mesmo código; na janela seguinte, outro (204.4595ms)\n  ✔ R3 - relógio em 10:15:30: trocaEm=10:16:00 e validoAte=10:17:00 (49.8422ms)\n  ✔ R2 - encontro de atividade cancelada (relógio dentro da janela) retorna 422 ATIVIDADE_CANCELADA (44.8165ms)\n  ✔ R1 - fora da janela 16 min antes do início retorna 422 FORA_DA_JANELA (45.8274ms)\n  ✔ R1 - fora da janela 31 min após o início retorna 422 FORA_DA_JANELA (36.4845ms)\n  ✔ R1 - bordas da janela de obtenção: início - 15 min e início + 30 min retornam 200 (44.6154ms)\n✔ M3 Fatia 1 - Código do encontro (620.8803ms)\n▶ Modo de teste - infraestrutura\n  ✔ POST /_teste/reset retorna 204 (149.0805ms)\n  ✔ após reset, GET /_teste/relogio retorna o relógio inicial 2026-10-13T09:00:00-03:00 (40.2547ms)\n  ✔ após reset, dados iniciais de usuários são carregados (32.6701ms)\n  ✔ após reset, dados iniciais de salas são carregados (33.4353ms)\n  ✔ sem MODO_TESTE, rotas /_teste/* retornam 404 (107.9384ms)\n✔ Modo de teste - infraestrutura (555.5671ms)\n▶ M3 Fatia 3 - Presença offline (lidoEm)\n  ✔ R11 - POST com lidoEm dentro da janela, código válido nesse instante e envio até 2h após o fim retorna 201 com origem='qr_offline' (200.5116ms)\n  ✔ R11 - POST com lidoEm dentro da janela, mas envio após 2h do fim do encontro retorna 422 SINCRONIZACAO_TARDIA (79.8147ms)\n  ✔ R11 - POST com lidoEm posterior ao envio valida janela e código pelo instante do envio (70.9703ms)\n✔ M3 Fatia 3 - Presença offline (lidoEm) (560.531ms)\n▶ M3 Fatia 2 - Presença online básica\n  ✔ R8 - POST sem lidoEm de inscrito confirmado retorna 201 com origem='qr' e lidoEm=registradaEm=relógio (202.145ms)\n  ✔ R7 - POST de participante com inscrição em_espera retorna 403 NAO_INSCRITO (60.1648ms)\n  ✔ R6 - POST com relógio fora de [inicio-15, inicio+30] retorna 422 FORA_DA_JANELA (67.3152ms)\n  ✔ R6 - POST com relógio em inicio+30 min:00 (borda) retorna 201 (54.7518ms)\n  ✔ R9 - POST com código que nunca foi gerado retorna 422 CODIGO_INVALIDO (32.0255ms)\n  ✔ R14 - POST com o código da janela anterior (dentro da janela de presença) retorna 201 (87.9161ms)\n  ✔ R12 - segundo POST do mesmo participante/encontro retorna 200 mantendo lidoEm/registradaEm/origem (35.5338ms)\n  ✔ R9 - POST com código já expirado (fora das janelas atual e anterior) retorna 422 CODIGO_INVALIDO (32.8607ms)\n  ✔ R5 - validade do código é restrita ao par (encontro, janela): código de outro encontro é rejeitado (40.642ms)\n✔ M3 Fatia 2 - Presença online básica (814.5075ms)\nℹ tests 23\nℹ suites 4\nℹ pass 23\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 2320.9776\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "npm test 2>&1",
+      "time": {
+       "start": 1789850049848,
+       "end": 1789850055750
+      }
+     },
+     "id": "prt_0bb605bce001KqPnEU7TF6NXtV",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb604ff2001kBw7e70eA5SPDC"
+    },
+    {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_bbb3b69267ee4c60b94ec642",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "npm run build 2>&1",
+       "workdir": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api"
+      },
+      "output": "\n> semana-academica-api@1.0.0 build\n> tsc\n\n",
+      "metadata": {
+       "output": "\n> semana-academica-api@1.0.0 build\n> tsc\n\n",
+       "exit": 0,
+       "truncated": false
+      },
+      "title": "npm run build 2>&1",
+      "time": {
+       "start": 1789850050048,
+       "end": 1789850056715
+      }
+     },
+     "id": "prt_0bb605d430013w4yUaD04rPKvh",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb604ff2001kBw7e70eA5SPDC"
+    },
+    {
+     "reason": "tool-calls",
+     "snapshot": "d93aab946d3576adee460a55ba51271d5ffc8cbd",
+     "type": "step-finish",
+     "tokens": {
+      "total": 47358,
+      "input": 256,
+      "output": 254,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 46848
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb6079f6001EYAPmX3TRgOghI",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb604ff2001kBw7e70eA5SPDC"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0bb5dae00001MAIVjsRC2jQsmD",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\ferna_fxhnpvd\\semana-academica\\api",
+     "root": "C:\\Users\\ferna_fxhnpvd\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "total": 49247,
+     "input": 1315,
+     "output": 828,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 47104
+     }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789850057786,
+     "completed": 1789850065473
+    },
+    "finish": "stop",
+    "id": "msg_0bb607c3a001AO9JsMflXB7D6k",
+    "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF"
+   },
+   "parts": [
+    {
+     "snapshot": "d93aab946d3576adee460a55ba51271d5ffc8cbd",
+     "type": "step-start",
+     "id": "prt_0bb6081d4001wyQecH06pf3fR2",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb607c3a001AO9JsMflXB7D6k"
+    },
+    {
+     "type": "reasoning",
+     "text": "Everything green. Fatia 3 completed:\n- 3 new tests (R11 offline: verificação por lidoEm; lidoEm futuro → vale o envio; SINCRONIZACAO_TARDIA após 2h do fim; origem=qr_offline).\n- No changes to existing tests.\n- No rules from fatias 4–6 implemented. The implementation only added the offline path; I did add SINCRONIZACAO_TARDIA before FORA_DA_JANELA/CODIGO_INVALIDO which touches R13 precedence but only minimal to make AC18 pass — actually R13 is about precedence and is Fatia 4. Hmm. Let me reconsider whether implementing the sync check *before* the janela/código checks is \"implementing Fatia 4 (R13)\".\n\nR13: precedence NAO_INSCRITO → SINCRONIZACAO_TARDIA → FORA_DA_JANELA → CODIGO_INVALIDO. My implementation places SINCRONIZACAO_TARDIA before FORA_DA_JANELA/CODIGO_INVALIDO for the offline path, which is consistent with R13, but it's the minimal order needed for AC18 to pass (envio after fim+2h: if we checked FORA_DA_JANELA first at instanteEfetivo, lidoEm=10:15:30 is inside window so no FORA_DA_JANELA; código valid at lidoEm; so we'd reach sync check anyway and return SINCRONIZACAO_TARDIA 422). Actually even if I placed the sync check last, AC18 would still pass because lidoEm is in-window and code valid. So placing it before is not strictly required for Fatia 3 tests. But is it \"implementing Fatia 4\"? It's just where I chose to put the check. The rule R11 itself defines SINCRONIZACAO_TARDIA as an error of the offline POST; its position relative to others is defined by R13 which is Fatia 4. I didn't fully implement the precedence (e.g., NAO_INSCRITO vs SINCRONIZACAO_TARDIA remains NAO_INSCRITO first, which per R13 is correct — inscrito check is before in my code too). This is fine; it doesn't add Fatia-4-specific behavior beyond a natural ordering. I think we're good.\n\nLet me summarize: 23 tests passed, 0 failed.\n\nReport concisely.",
+     "time": {
+      "start": 1789850059252,
+      "end": 1789850063100
+     },
+     "id": "prt_0bb6081f40012qGSUV91dzfg8f",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb607c3a001AO9JsMflXB7D6k"
+    },
+    {
+     "type": "text",
+     "text": "Fatia 3 de M3 concluída (R11: sincronização offline).\n\n**Ciclo seguido:**\n1. Teste 1 (AC17) — `lidoEm` na janela + envio até 2h após o fim → falhou (422) → implementei `origem=\"qr_offline\"`, `lidoEm` armazenado do corpo, validação de janela/código no instante efetivo `min(lidoEm, envio)` e `SINCRONIZACAO_TARDIA` → verde.\n2. Teste 2 (AC18) — envio após `fim + 2h` → `SINCRONIZACAO_TARDIA` → verde.\n3. Teste 3 (AC19) — `lidoEm` posterior ao envio, validação pelo instante do envio → 201 `qr_offline` → verde.\n\nAlterado apenas `src/rotas/presencas.ts:83-176` e adicionado `verificacoes/presencas-offline.spec.ts`. Testes das fatias 1–2 intactos; nada das fatias 4–6 foi implementado.\n\n**Resultado final: 23 passed, 0 failed** (build `tsc` sem erros).",
+     "time": {
+      "start": 1789850063105,
+      "end": 1789850064495
+     },
+     "id": "prt_0bb609101001H7w1kiORxqqP8f",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb607c3a001AO9JsMflXB7D6k"
+    },
+    {
+     "reason": "stop",
+     "snapshot": "d93aab946d3576adee460a55ba51271d5ffc8cbd",
+     "type": "step-finish",
+     "tokens": {
+      "total": 49247,
+      "input": 1315,
+      "output": 828,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 47104
+      }
+     },
+     "cost": 0,
+     "id": "prt_0bb609832001k7Y064nUcOEiLB",
+     "sessionID": "ses_f44a25256ffeeF9ZojiMWkK3lF",
+     "messageID": "msg_0bb607c3a001AO9JsMflXB7D6k"
+    }
+   ]
+  }
+ ]
+}
