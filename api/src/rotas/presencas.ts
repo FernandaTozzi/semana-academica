@@ -249,7 +249,11 @@ export function registrarRotasPresencas(app: FastifyInstance) {
 
       const agoraMs = agoraServidor(app).getTime();
       const inicio = new Date(encontro.inicio as string).getTime();
-      if (agoraMs < inicio - MINUTOS_ANTES) {
+      const fim = new Date(encontro.fim as string).getTime();
+      if (
+        agoraMs < inicio - MINUTOS_ANTES ||
+        agoraMs > fim + 2 * 60 * 60 * 1000
+      ) {
         return reply.code(422).send({
           erro: "FORA_DA_JANELA",
           mensagem: "Fora da janela de registro de presença manual",
@@ -274,6 +278,44 @@ export function registrarRotasPresencas(app: FastifyInstance) {
         registradaEm,
         justificativa,
       });
+    }
+  );
+
+  app.get(
+    "/encontros/:id/presencas",
+    { preHandler: verifyAuth },
+    async (req, reply) => {
+      const usuario = req.usuario;
+      if (!usuario || usuario.papel !== "organizacao") {
+        return reply.code(403).send({
+          erro: "SOMENTE_ORGANIZACAO",
+          mensagem: "Apenas a organização lista presenças",
+        });
+      }
+
+      const { id } = req.params as { id: string };
+      const db = app.db;
+
+      const existe = db.exec("SELECT id FROM encontros WHERE id = ?", [id]);
+      if (existe.length === 0 || existe[0].values.length === 0) {
+        return reply.code(404).send({
+          erro: "NAO_ENCONTRADO",
+          mensagem: "Encontro não encontrado",
+        });
+      }
+
+      const result = db.exec(
+        "SELECT id, participante_id, origem, lido_em, registrada_em, justificativa FROM presencas WHERE encontro_id = ? ORDER BY registrada_em ASC",
+        [id]
+      );
+      if (result.length === 0 || result[0].values.length === 0) {
+        return reply.send([]);
+      }
+      const { columns, values } = result[0];
+      const idxParticipante = columns.indexOf("participante_id");
+      return reply.send(
+        values.map((v) => presencaParaObjeto(columns, v, id, v[idxParticipante] as string))
+      );
     }
   );
 }
