@@ -22,6 +22,17 @@ export async function createServer() {
 
   app.decorate("db", db);
 
+  app.addHook("onSend", async (_req, reply, payload) => {
+    reply.header("Access-Control-Allow-Origin", "*");
+    reply.header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
+    reply.header("Access-Control-Allow-Headers", "Content-Type, X-Usuario");
+    return payload;
+  });
+
+  app.options("/*", async (_req, reply) => {
+    return reply.code(204).send();
+  });
+
   // Permitir body vazio em POST
   app.addContentTypeParser("application/json", { parseAs: "string" }, (req, body, done) => {
     try {

@@ -1,0 +1,12 @@
+{
+  "name": "semana-academica-ui",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node servidor.mjs",
+    "test": "node --test teste/*.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0"
+  }
+}

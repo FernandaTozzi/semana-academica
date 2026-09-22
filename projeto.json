@@ -1,9 +1,14 @@
 {
-  "stack": "Node.js 20 + TypeScript + Fastify + SQLite (sql.js WASM)",
+  "stack": "Node.js 20 + TypeScript + Fastify + SQLite (sql.js WASM); interface web vanilla HTML/CSS/JS com testes node:test + jsdom (API mock)",
   "api": {
     "pasta": "api",
     "instalar": "npm install",
     "iniciar": "npm start"
   },
-  "testes": ["npm test"]
+  "interface": {
+    "pasta": "ui",
+    "instalar": "npm install",
+    "iniciar": "npm start"
+  },
+  "testes": ["npm test", "npm --prefix ui test"]
 }

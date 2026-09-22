@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M3 — Presença por QR</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topo">
+    <h1>Presença por QR</h1>
+    <nav class="abas">
+      <button id="tab-organizacao" class="aba ativo" type="button">Organização</button>
+      <button id="tab-participante" class="aba" type="button">Participante</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="tela-organizacao" class="tela">
+      <h2>Código do encontro</h2>
+      <form id="org-form" class="formulario">
+        <label>
+          ID do encontro
+          <input id="org-encontro-id" name="encontroId" placeholder="enc_…" autocomplete="off" spellcheck="false">
+        </label>
+        <button id="org-carregar" type="submit" class="principal">Obter código</button>
+      </form>
+
+      <p id="org-msg" class="msg" role="status"></p>
+
+      <div id="org-codigo-box" class="codigo-box" hidden>
+        <div id="org-codigo" class="codigo-grande" aria-label="Código de presença"></div>
+        <div class="codigo-meta">
+          <span>Encontro <b id="org-encontro-info"></b></span>
+          <span>Válido até <time id="org-valido"></time></span>
+          <span>Próxima troca <time id="org-troca"></time></span>
+        </div>
+        <button id="org-cheia" type="button" class="segundario">Tela cheia</button>
+      </div>
+    </section>
+
+    <section id="tela-participante" class="tela" hidden>
+      <h2>Registrar presença</h2>
+      <form id="par-form" class="formulario">
+        <label>
+          ID do encontro
+          <input id="par-encontro-id" name="encontroId" placeholder="enc_…" autocomplete="off" spellcheck="false">
+        </label>
+        <label>
+          Código (6 caracteres)
+          <input id="par-codigo" name="codigo" maxlength="6" placeholder="ABC123" autocomplete="off" spellcheck="false">
+        </label>
+        <button id="par-enviar" type="submit" class="principal">Registrar presença</button>
+      </form>
+
+      <p id="par-msg" class="msg" role="status"></p>
+
+      <section id="par-leituras-box" class="leituras" hidden>
+        <h3>Leituras locais</h3>
+        <ul id="par-leituras"></ul>
+      </section>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
