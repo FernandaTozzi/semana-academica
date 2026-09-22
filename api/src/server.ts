@@ -1,4 +1,6 @@
 import Fastify from "fastify";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { inicializarBanco } from "./db.js";
 import { registrarRotasTeste } from "./rotas/teste.js";
 import { registrarRotasSalas } from "./rotas/salas.js";
@@ -53,4 +55,19 @@ export async function createServer() {
   registrarRotasPresencas(app);
 
   return app;
+}
+
+export async function startServer() {
+  const app = await createServer();
+  const port = Number(process.env.PORT ?? 3000);
+  await app.listen({ port });
+  return app;
+}
+
+const isMainModule =
+  process.argv[1] != null &&
+  pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+
+if (isMainModule) {
+  startServer();
 }
