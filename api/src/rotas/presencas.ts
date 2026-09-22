@@ -260,6 +260,27 @@ export function registrarRotasPresencas(app: FastifyInstance) {
         });
       }
 
+      const confirmadas = db.exec(
+        `SELECT COUNT(*) AS total FROM inscricoes
+         WHERE atividade_id = ? AND status = 'confirmada'`,
+        [encontro.atividade_id as string]
+      );
+      const teto = Math.ceil(
+        Number(confirmadas[0].values[0][0]) * 0.1
+      );
+      const manuais = db.exec(
+        `SELECT COUNT(*) AS total FROM presencas
+         WHERE encontro_id = ? AND origem = 'manual'`,
+        [id]
+      );
+      const manuaisRegistradas = Number(manuais[0].values[0][0]);
+      if (manuaisRegistradas >= teto) {
+        return reply.code(422).send({
+          erro: "LIMITE_DE_MANUAIS",
+          mensagem: "Limite de presenças manuais para este encontro atingido",
+        });
+      }
+
       const idPresenca = novoIdPresenca();
       const registradaEm = new Date(agoraMs).toISOString();
       db.run(
