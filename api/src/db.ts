@@ -82,7 +82,7 @@ export async function inicializarBanco(): Promise<Database> {
       encontro_id TEXT NOT NULL REFERENCES encontros(id) ON DELETE CASCADE,
       participante_id TEXT NOT NULL REFERENCES usuarios(id),
       origem TEXT NOT NULL CHECK (origem IN ('qr', 'qr_offline', 'manual')),
-      lido_em TEXT NOT NULL,
+      lido_em TEXT,
       registrada_em TEXT NOT NULL DEFAULT (datetime('now')),
       justificativa TEXT
     );
@@ -109,8 +109,38 @@ export async function inicializarBanco(): Promise<Database> {
     );
   `);
 
+  migrarLidoEmAnulavel(db);
+
   dbInstance = db;
   return db;
+}
+
+function migrarLidoEmAnulavel(db: Database) {
+  const info = db.exec("PRAGMA table_info(presencas)");
+  if (info.length === 0) return;
+  const { columns, values } = info[0];
+  const colunas: Record<string, number> = {};
+  columns.forEach((c, i) => { colunas[c] = i; });
+  const linha = values.find((v) => v[colunas.name] === "lido_em");
+  if (!linha || Number(linha[colunas.notnull]) === 0) return;
+
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec(`
+    CREATE TABLE presencas_tmp (
+      id TEXT PRIMARY KEY,
+      encontro_id TEXT NOT NULL REFERENCES encontros(id) ON DELETE CASCADE,
+      participante_id TEXT NOT NULL REFERENCES usuarios(id),
+      origem TEXT NOT NULL CHECK (origem IN ('qr', 'qr_offline', 'manual')),
+      lido_em TEXT,
+      registrada_em TEXT NOT NULL DEFAULT (datetime('now')),
+      justificativa TEXT
+    );
+    INSERT INTO presencas_tmp (id, encontro_id, participante_id, origem, lido_em, registrada_em, justificativa)
+      SELECT id, encontro_id, participante_id, origem, lido_em, registrada_em, justificativa FROM presencas;
+    DROP TABLE presencas;
+    ALTER TABLE presencas_tmp RENAME TO presencas;
+  `);
+  db.exec("PRAGMA foreign_keys = ON");
 }
 
 export function salvarBanco(db: Database) {

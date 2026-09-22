@@ -175,4 +175,105 @@ export function registrarRotasPresencas(app: FastifyInstance) {
       });
     }
   );
+
+  app.post(
+    "/encontros/:id/presencas/manual",
+    { preHandler: verifyAuth },
+    async (req, reply) => {
+      const usuario = req.usuario;
+      if (!usuario || usuario.papel !== "organizacao") {
+        return reply.code(403).send({
+          erro: "SOMENTE_ORGANIZACAO",
+          mensagem: "Apenas a organização registra presença manual",
+        });
+      }
+
+      const { id } = req.params as { id: string };
+      const db = app.db;
+
+      const result = db.exec(
+        `SELECT e.id, e.inicio, e.fim, e.atividade_id
+         FROM encontros e
+         WHERE e.id = ?`,
+        [id]
+      );
+      if (result.length === 0 || result[0].values.length === 0) {
+        return reply.code(404).send({
+          erro: "NAO_ENCONTRADO",
+          mensagem: "Encontro não encontrado",
+        });
+      }
+      const encontro = linhaParaObjeto(result[0].columns, result[0].values[0]);
+
+      const corpo = (req.body ?? {}) as { participanteId?: unknown; justificativa?: unknown };
+      const participanteId =
+        typeof corpo.participanteId === "string" ? corpo.participanteId : "";
+      if (!participanteId) {
+        return reply.code(422).send({
+          erro: "DADOS_INVALIDOS",
+          mensagem: "Campo 'participanteId' é obrigatório",
+        });
+      }
+      const justificativa =
+        typeof corpo.justificativa === "string" ? corpo.justificativa : null;
+      if (justificativa === null || justificativa.length < 10) {
+        return reply.code(422).send({
+          erro: "JUSTIFICATIVA_OBRIGATORIA",
+          mensagem: "justificativa é obrigatória e deve ter pelo menos 10 caracteres",
+        });
+      }
+
+      const existente = db.exec(
+        `SELECT id, origem, lido_em, registrada_em, justificativa
+         FROM presencas
+         WHERE encontro_id = ? AND participante_id = ?`,
+        [id, participanteId]
+      );
+      if (existente.length > 0 && existente[0].values.length > 0) {
+        return reply.code(200).send(
+          presencaParaObjeto(existente[0].columns, existente[0].values[0], id, participanteId)
+        );
+      }
+
+      const inscrito = db.exec(
+        `SELECT 1 FROM inscricoes
+         WHERE atividade_id = ? AND participante_id = ? AND status = 'confirmada'`,
+        [encontro.atividade_id as string, participanteId]
+      );
+      if (inscrito.length === 0 || inscrito[0].values.length === 0) {
+        return reply.code(403).send({
+          erro: "NAO_INSCRITO",
+          mensagem: "Participante não tem inscrição confirmada na atividade",
+        });
+      }
+
+      const agoraMs = agoraServidor(app).getTime();
+      const inicio = new Date(encontro.inicio as string).getTime();
+      if (agoraMs < inicio - MINUTOS_ANTES) {
+        return reply.code(422).send({
+          erro: "FORA_DA_JANELA",
+          mensagem: "Fora da janela de registro de presença manual",
+        });
+      }
+
+      const idPresenca = novoIdPresenca();
+      const registradaEm = new Date(agoraMs).toISOString();
+      db.run(
+        `INSERT INTO presencas (id, encontro_id, participante_id, origem, lido_em, registrada_em, justificativa)
+         VALUES (?, ?, ?, 'manual', NULL, ?, ?)`,
+        [idPresenca, id, participanteId, registradaEm, justificativa]
+      );
+      salvarBanco(db);
+
+      return reply.code(201).send({
+        id: idPresenca,
+        encontroId: id,
+        participanteId,
+        origem: "manual",
+        lidoEm: null,
+        registradaEm,
+        justificativa,
+      });
+    }
+  );
 }
