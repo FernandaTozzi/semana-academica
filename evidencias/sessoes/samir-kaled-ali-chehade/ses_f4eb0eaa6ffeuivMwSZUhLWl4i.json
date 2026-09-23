@@ -1,0 +1,184 @@
+{
+ "info": {
+  "id": "ses_f4eb0eaa6ffeuivMwSZUhLWl4i",
+  "slug": "sunny-lagoon",
+  "projectID": "4ebb33c409819457a4c625537f9493c08ea399de",
+  "directory": "C:\\Users\\samir\\Desktop\\Faculdade\\semana-academica",
+  "path": "",
+  "title": "New session - 2026-09-17T21:39:05.177Z",
+  "agent": "build",
+  "model": {
+   "id": "nemotron-3-ultra-free",
+   "providerID": "opencode"
+  },
+  "version": "1.18.31",
+  "summary": {
+   "additions": 0,
+   "deletions": 0,
+   "files": 0
+  },
+  "cost": 0,
+  "tokens": {
+   "input": 0,
+   "output": 0,
+   "reasoning": 0,
+   "cache": {
+    "read": 0,
+    "write": 0
+   }
+  },
+  "time": {
+   "created": 1789681145177,
+   "updated": 1789681187882
+  }
+ },
+ "messages": [
+  {
+   "info": {
+    "role": "user",
+    "time": {
+     "created": 1789681145227
+    },
+    "agent": "build",
+    "model": {
+     "providerID": "opencode",
+     "modelID": "nemotron-3-ultra-free"
+    },
+    "summary": {
+     "diffs": []
+    },
+    "id": "msg_0b14f158b001INwLqNWjC3Nso9",
+    "sessionID": "ses_f4eb0eaa6ffeuivMwSZUhLWl4i"
+   },
+   "parts": [
+    {
+     "type": "text",
+     "text": "opencode -s ses_f4f0892e5ffemDfn1syMSmtKk",
+     "id": "prt_0b14f1590001eZeHCe47h8rCZB",
+     "sessionID": "ses_f4eb0eaa6ffeuivMwSZUhLWl4i",
+     "messageID": "msg_0b14f158b001INwLqNWjC3Nso9"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0b14f158b001INwLqNWjC3Nso9",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\samir\\Desktop\\Faculdade\\semana-academica",
+     "root": "C:\\Users\\samir\\Desktop\\Faculdade\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "input": 0,
+     "output": 0,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    },
+    "modelID": "nemotron-3-ultra-free",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789681145275,
+     "completed": 1789681164090
+    },
+    "error": {
+     "name": "UnknownError",
+     "data": {
+      "message": "ERR_TLS_CERT_ALTNAME_INVALID fetching \"https://opencode.ai/zen/v1/chat/completions\". For more information, pass `verbose: true` in the second argument to fetch()"
+     }
+    },
+    "id": "msg_0b14f15bb001D66ZP9OS8f3iVu",
+    "sessionID": "ses_f4eb0eaa6ffeuivMwSZUhLWl4i"
+   },
+   "parts": []
+  },
+  {
+   "info": {
+    "role": "user",
+    "time": {
+     "created": 1789681187357
+    },
+    "agent": "build",
+    "model": {
+     "providerID": "opencode",
+     "modelID": "nemotron-3-ultra-free"
+    },
+    "summary": {
+     "diffs": []
+    },
+    "id": "msg_0b14fba1d001ZBWlfsj8NT626z",
+    "sessionID": "ses_f4eb0eaa6ffeuivMwSZUhLWl4i"
+   },
+   "parts": [
+    {
+     "type": "text",
+     "text": "opencode -s ses_f4f0892e5ffemDfn1syMSmtKk",
+     "id": "prt_0b14fba1f001FWisq05gPlN42h",
+     "sessionID": "ses_f4eb0eaa6ffeuivMwSZUhLWl4i",
+     "messageID": "msg_0b14fba1d001ZBWlfsj8NT626z"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0b14fba1d001ZBWlfsj8NT626z",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\samir\\Desktop\\Faculdade\\semana-academica",
+     "root": "C:\\Users\\samir\\Desktop\\Faculdade\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "input": 0,
+     "output": 0,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    },
+    "modelID": "nemotron-3-ultra-free",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789681187384,
+     "completed": 1789681192946
+    },
+    "error": {
+     "name": "MessageAbortedError",
+     "data": {
+      "message": "Aborted"
+     }
+    },
+    "id": "msg_0b14fba38001UwGFL0c2NDXZOg",
+    "sessionID": "ses_f4eb0eaa6ffeuivMwSZUhLWl4i"
+   },
+   "parts": [
+    {
+     "snapshot": "f499dbc308db6be26c9603460787b97bfb2661c3",
+     "type": "step-start",
+     "id": "prt_0b14fcdc30017MGvNM9NDWcErQ",
+     "sessionID": "ses_f4eb0eaa6ffeuivMwSZUhLWl4i",
+     "messageID": "msg_0b14fba38001UwGFL0c2NDXZOg"
+    },
+    {
+     "type": "reasoning",
+     "text": "The user is trying to",
+     "time": {
+      "start": 1789681192396,
+      "end": 1789681192941
+     },
+     "id": "prt_0b14fcdcc0016XHS6CcI6gEOLd",
+     "sessionID": "ses_f4eb0eaa6ffeuivMwSZUhLWl4i",
+     "messageID": "msg_0b14fba38001UwGFL0c2NDXZOg"
+    }
+   ]
+  }
+ ]
+}
