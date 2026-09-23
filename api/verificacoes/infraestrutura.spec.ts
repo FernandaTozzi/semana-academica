@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "../src/server.js";
 
 let server: Awaited<ReturnType<typeof createServer>>;
-const BASE_URL = "http://localhost:3000";
+const BASE_URL = "http://localhost:3001";
 
 async function fetchJson(path: string, options: RequestInit = {}) {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -28,9 +28,9 @@ async function fetchJson(path: string, options: RequestInit = {}) {
 describe("Modo de teste - infraestrutura", () => {
   before(async () => {
     process.env.MODO_TESTE = "1";
-    process.env.PORT = "3000";
+    process.env.PORT = "3001";
     server = await createServer();
-    await new Promise<void>((resolve) => server.listen({ port: 3000 }, resolve));
+    await new Promise<void>((resolve) => server.listen({ port: 3001 }, resolve));
   });
 
   after(async () => {
@@ -67,26 +67,26 @@ describe("Modo de teste - infraestrutura", () => {
     });
     assert.equal(status, 200);
     assert.ok(Array.isArray(body));
-    assert.equal((body as Array<{ id: string }>).length, 4);
+    assert.equal((body as Array<{ id: string }>).length, 3);
     const ids = (body as Array<{ id: string }>).map((s) => s.id).sort();
-    assert.deepEqual(ids, ["auditorio", "lab-3", "sala-101", "sala-102"]);
+    assert.deepEqual(ids, ["sala_01", "sala_02", "sala_03"]);
   });
 
   it("sem MODO_TESTE, rotas /_teste/* retornam 404", async () => {
     await server.close();
     delete process.env.MODO_TESTE;
     server = await createServer();
-    await new Promise<void>((resolve) => server.listen({ port: 3001 }, resolve));
+    await new Promise<void>((resolve) => server.listen({ port: 3002 }, resolve));
 
-    const { status: statusReset } = await fetch("http://localhost:3001/_teste/reset", {
+    const { status: statusReset } = await fetch("http://localhost:3002/_teste/reset", {
       method: "POST",
     });
     assert.equal(statusReset, 404);
 
-    const { status: statusRelogioGet } = await fetch("http://localhost:3001/_teste/relogio");
+    const { status: statusRelogioGet } = await fetch("http://localhost:3002/_teste/relogio");
     assert.equal(statusRelogioGet, 404);
 
-    const { status: statusRelogioPut } = await fetch("http://localhost:3001/_teste/relogio", {
+    const { status: statusRelogioPut } = await fetch("http://localhost:3002/_teste/relogio", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agora: "2026-10-13T09:00:00-03:00" }),
@@ -96,6 +96,6 @@ describe("Modo de teste - infraestrutura", () => {
     await server.close();
     process.env.MODO_TESTE = "1";
     server = await createServer();
-    await new Promise<void>((resolve) => server.listen({ port: 3000 }, resolve));
+    await new Promise<void>((resolve) => server.listen({ port: 3001 }, resolve));
   });
 });

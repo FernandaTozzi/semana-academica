@@ -1,0 +1,101 @@
+{
+ "info": {
+  "id": "ses_f4f01b8bbffe1njpHpPwKRHtgB",
+  "slug": "nimble-rocket",
+  "projectID": "4ebb33c409819457a4c625537f9493c08ea399de",
+  "directory": "C:\\Users\\samir\\Desktop\\Faculdade\\semana-academica",
+  "path": "",
+  "title": "New session - 2026-09-17T20:10:49.540Z",
+  "agent": "build",
+  "model": {
+   "id": "nemotron-3-ultra-free",
+   "providerID": "opencode"
+  },
+  "version": "1.18.31",
+  "summary": {
+   "additions": 0,
+   "deletions": 0,
+   "files": 0
+  },
+  "cost": 0,
+  "tokens": {
+   "input": 0,
+   "output": 0,
+   "reasoning": 0,
+   "cache": {
+    "read": 0,
+    "write": 0
+   }
+  },
+  "time": {
+   "created": 1789675849540,
+   "updated": 1789675850387
+  }
+ },
+ "messages": [
+  {
+   "info": {
+    "role": "user",
+    "time": {
+     "created": 1789675849629
+    },
+    "agent": "build",
+    "model": {
+     "providerID": "opencode",
+     "modelID": "nemotron-3-ultra-free"
+    },
+    "summary": {
+     "diffs": []
+    },
+    "id": "msg_0b0fe479c001RBsu6z33or6yS5",
+    "sessionID": "ses_f4f01b8bbffe1njpHpPwKRHtgB"
+   },
+   "parts": [
+    {
+     "type": "text",
+     "text": "realize o teste",
+     "id": "prt_0b0fe47a1001kp6KZXvQQNxv6N",
+     "sessionID": "ses_f4f01b8bbffe1njpHpPwKRHtgB",
+     "messageID": "msg_0b0fe479c001RBsu6z33or6yS5"
+    }
+   ]
+  },
+  {
+   "info": {
+    "parentID": "msg_0b0fe479c001RBsu6z33or6yS5",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "C:\\Users\\samir\\Desktop\\Faculdade\\semana-academica",
+     "root": "C:\\Users\\samir\\Desktop\\Faculdade\\semana-academica"
+    },
+    "cost": 0,
+    "tokens": {
+     "input": 0,
+     "output": 0,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    },
+    "modelID": "nemotron-3-ultra-free",
+    "providerID": "opencode",
+    "time": {
+     "created": 1789675849684,
+     "completed": 1789675851401
+    },
+    "error": {
+     "name": "MessageAbortedError",
+     "data": {
+      "message": "Aborted"
+     }
+    },
+    "id": "msg_0b0fe47d4001jIreP8WPEPz0JU",
+    "sessionID": "ses_f4f01b8bbffe1njpHpPwKRHtgB"
+   },
+   "parts": []
+  }
+ ]
+}

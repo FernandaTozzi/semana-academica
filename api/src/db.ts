@@ -164,10 +164,9 @@ export function carregarDadosIniciais(db: Database) {
   ];
 
   const salas = [
-    { id: "auditorio", nome: "Auditório Central", capacidade: 200 },
-    { id: "sala-101", nome: "Sala 101", capacidade: 40 },
-    { id: "sala-102", nome: "Sala 102", capacidade: 40 },
-    { id: "lab-3", nome: "Laboratório 3", capacidade: 20 },
+    { id: "sala_01", nome: "Sala 01", capacidade: 30 },
+    { id: "sala_02", nome: "Sala 02", capacidade: 60 },
+    { id: "sala_03", nome: "Auditório", capacidade: 100 },
   ];
 
   const insertUsuario = db.prepare(
@@ -189,6 +188,7 @@ export function resetarBanco(db: Database) {
     "encontros",
     "atividades",
     "bloqueios",
+    "salas",
   ];
 
   for (const t of tabelas) {
